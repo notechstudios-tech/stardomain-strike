@@ -34,11 +34,11 @@ class _MessageOverlayState extends State<MessageOverlay> {
         _text,
         textAlign: TextAlign.center,
         style: const TextStyle(
-          color: Colors.white,
-          fontSize: 48,
+          color: Colors.yellow,
+          fontSize: 28,
           fontWeight: FontWeight.bold,
           decoration: TextDecoration.none,
-          shadows: [Shadow(blurRadius: 8, color: Colors.black87)],
+          shadows: [Shadow(blurRadius: 6, color: Colors.black87)],
         ),
       ),
     );

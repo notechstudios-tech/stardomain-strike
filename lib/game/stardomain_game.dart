@@ -16,11 +16,14 @@ class StardomainGame extends FlameGame {
   static const String overlayHud = 'hud';
   static const String overlayStarInfo = 'starInfo';
 
-  static const double universeSize = 1600;
-  // Player star fixed at left-center, enemy at right-center
-  static const double playerStarX = 500;
+  // Universe is twice as wide as tall to fill the screen at max zoom-out
+  static const double universeWidth = 3200;
+  static const double universeHeight = 1600;
+
+  // Fixed home star positions
+  static const double playerStarX = 800;
   static const double playerStarY = 800;
-  static const double enemyStarX = 1100;
+  static const double enemyStarX = 2400;
   static const double enemyStarY = 800;
 
   final AdsService adsService = AdsService();
@@ -94,13 +97,11 @@ class StardomainGame extends FlameGame {
 
     final oldZoom = camera.viewfinder.zoom;
 
-    // Zoom centered on the focal point
     if ((newZoom - oldZoom).abs() > 0.001) {
       camera.viewfinder.position += focal * (1.0 / oldZoom - 1.0 / newZoom);
       camera.viewfinder.zoom = newZoom;
     }
 
-    // Pan (convert screen delta to world units)
     if (panDelta.length2 > 0) {
       camera.viewfinder.position -= panDelta / camera.viewfinder.zoom;
     }
@@ -110,8 +111,8 @@ class StardomainGame extends FlameGame {
 
   void _clampCamera() {
     final z = camera.viewfinder.zoom;
-    final maxX = (universeSize - size.x / z).clamp(0.0, universeSize);
-    final maxY = (universeSize - size.y / z).clamp(0.0, universeSize);
+    final maxX = (universeWidth - size.x / z).clamp(0.0, universeWidth);
+    final maxY = (universeHeight - size.y / z).clamp(0.0, universeHeight);
     final pos = camera.viewfinder.position;
     pos.x = pos.x.clamp(0.0, maxX);
     pos.y = pos.y.clamp(0.0, maxY);
@@ -136,8 +137,8 @@ class StardomainGame extends FlameGame {
 
   void _spawnMenuStarfield() {
     final rand = math.Random();
-    final screenW = size.x;
-    final screenH = size.y;
+    final w = size.x;
+    final h = size.y;
 
     for (final (name, count, scale) in <(String, int, double)>[
       ('star_light', 80, 2.0),
@@ -151,7 +152,7 @@ class StardomainGame extends FlameGame {
       for (int i = 0; i < count; i++) {
         world.add(SpriteComponent(
           sprite: sp,
-          position: Vector2(rand.nextDouble() * screenW, rand.nextDouble() * screenH),
+          position: Vector2(rand.nextDouble() * w, rand.nextDouble() * h),
           anchor: Anchor.center,
           scale: Vector2.all(scale),
         ));
@@ -171,7 +172,7 @@ class StardomainGame extends FlameGame {
 
   Future<void> _loadLevel() async {
     if (currentLevel > levels.length) {
-      _showMessage('Winner! You beat the game!');
+      _showMessage('You beat the game!');
       await Future.delayed(const Duration(seconds: 2));
       _showMenu();
       return;
@@ -185,7 +186,6 @@ class StardomainGame extends FlameGame {
     _stopMusic();
     _playMusic('level_music.wav');
 
-    // Start focused on the player's star
     camera.viewfinder.position = Vector2(
       playerStarX - size.x / 2,
       playerStarY - size.y / 2,
@@ -200,30 +200,36 @@ class StardomainGame extends FlameGame {
   void _buildUniverse() {
     final rand = math.Random();
 
-    // Background nebulas
+    // Background nebulas spread across full width
     for (final (name, count, scale) in <(String, int, double)>[
-      ('nebula_red', 2, 6.0),
-      ('nebula_blue', 3, 6.0),
+      ('nebula_red', 3, 6.0),
+      ('nebula_blue', 4, 6.0),
     ]) {
       final sp = _sprites[name];
       if (sp == null) continue;
       for (int i = 0; i < count; i++) {
         world.add(SpriteComponent(
           sprite: sp,
-          position: Vector2(rand.nextDouble() * universeSize, rand.nextDouble() * universeSize),
+          position: Vector2(
+            rand.nextDouble() * universeWidth,
+            rand.nextDouble() * universeHeight,
+          ),
           anchor: Anchor.center,
           scale: Vector2.all(scale),
         ));
       }
     }
 
-    // Neutral stars (background dots for atmosphere + interactive ones)
+    // Atmospheric background dots
     final bgSp = _sprites['star_light'];
     if (bgSp != null) {
-      for (int i = 0; i < 100; i++) {
+      for (int i = 0; i < 160; i++) {
         world.add(SpriteComponent(
           sprite: bgSp,
-          position: Vector2(rand.nextDouble() * universeSize, rand.nextDouble() * universeSize),
+          position: Vector2(
+            rand.nextDouble() * universeWidth,
+            rand.nextDouble() * universeHeight,
+          ),
           anchor: Anchor.center,
           scale: Vector2.all(1.5),
         ));
@@ -231,28 +237,20 @@ class StardomainGame extends FlameGame {
     }
 
     // Interactive neutral stars
-    final neutralCount = _levelConfig.neutralStarCount;
-    final largeCount = (neutralCount * 0.15).round();
-    final mediumCount = (neutralCount * 0.35).round();
-    final lightCount = neutralCount - largeCount - mediumCount;
+    final n = _levelConfig.neutralStarCount;
+    _spawnNeutralStars('star_large', StarSize.large, (n * 0.15).round(), rand);
+    _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
+    _spawnNeutralStars('star_light', StarSize.light, n - (n * 0.15).round() - (n * 0.35).round(), rand);
 
-    _spawnNeutralStars('star_large', StarSize.large, largeCount, rand);
-    _spawnNeutralStars('star_medium', StarSize.medium, mediumCount, rand);
-    _spawnNeutralStars('star_light', StarSize.light, lightCount, rand);
-
-    // Player's home star (blue)
+    // Fixed home stars
     _spawnOccupiedStar(
       x: playerStarX, y: playerStarY,
-      owner: 'player',
-      enemySprite: 'enemy_blue',
+      owner: 'player', enemySprite: 'enemy_blue',
       ships: 10, resources: 5, defence: 1,
     );
-
-    // Enemy's home star (red)
     _spawnOccupiedStar(
       x: enemyStarX, y: enemyStarY,
-      owner: 'enemy_red',
-      enemySprite: 'enemy_red',
+      owner: 'enemy_red', enemySprite: 'enemy_red',
       ships: 10, resources: 5, defence: 1,
     );
   }
@@ -267,15 +265,18 @@ class StardomainGame extends FlameGame {
     };
     for (int i = 0; i < count; i++) {
       double x, y;
-      // Keep neutral stars away from the fixed home stars
       do {
-        x = rand.nextDouble() * (universeSize - 100) + 50;
-        y = rand.nextDouble() * (universeSize - 100) + 50;
+        x = rand.nextDouble() * (universeWidth - 100) + 50;
+        y = rand.nextDouble() * (universeHeight - 100) + 50;
       } while (_tooCloseToHome(x, y));
 
-      final resources = rand.nextInt(6) + 2; // 2–7
       final star = StarComponent(
-        config: StarConfig(size: sz, x: x, y: y, resources: resources),
+        config: StarConfig(
+          size: sz, x: x, y: y,
+          ships: _randomShips(rand),
+          resources: _randomResources(rand),
+          defence: _randomDefence(rand),
+        ),
         sprite: sp,
       )
         ..position = Vector2(x, y)
@@ -286,19 +287,14 @@ class StardomainGame extends FlameGame {
   }
 
   void _spawnOccupiedStar({
-    required double x,
-    required double y,
-    required String owner,
-    required String enemySprite,
-    required int ships,
-    required int resources,
-    required int defence,
+    required double x, required double y,
+    required String owner, required String enemySprite,
+    required int ships, required int resources, required int defence,
   }) {
     final starSp = _sprites['star_large'];
     final iconSp = _sprites[enemySprite];
     if (starSp == null || iconSp == null) return;
 
-    // Star body underneath
     world.add(SpriteComponent(
       sprite: starSp,
       position: Vector2(x, y),
@@ -306,15 +302,11 @@ class StardomainGame extends FlameGame {
       scale: Vector2.all(4.5),
     ));
 
-    // Owner icon on top (slightly smaller so star peeks out)
     final star = StarComponent(
       config: StarConfig(
-        size: StarSize.large,
-        x: x, y: y,
-        owner: owner,
-        ships: ships,
-        resources: resources,
-        defence: defence,
+        size: StarSize.large, x: x, y: y,
+        owner: owner, ships: ships,
+        resources: resources, defence: defence,
       ),
       sprite: iconSp,
     )
@@ -325,12 +317,32 @@ class StardomainGame extends FlameGame {
   }
 
   bool _tooCloseToHome(double x, double y) {
-    const minDist = 120.0;
+    const minDist = 150.0;
     final dpx = x - playerStarX, dpy = y - playerStarY;
     final dex = x - enemyStarX, dey = y - enemyStarY;
     return (dpx * dpx + dpy * dpy) < minDist * minDist ||
         (dex * dex + dey * dey) < minDist * minDist;
   }
+
+  // ─── Random seeding helpers ───────────────────────────────────────────────
+
+  // 80% → 1, 15% → 2, 5% → 3
+  int _randomResources(math.Random rand) {
+    final r = rand.nextDouble();
+    if (r < 0.80) return 1;
+    if (r < 0.95) return 2;
+    return 3;
+  }
+
+  // 80% → 1, 15% → 2, 5% → 3
+  int _randomDefence(math.Random rand) {
+    final r = rand.nextDouble();
+    if (r < 0.80) return 1;
+    if (r < 0.95) return 2;
+    return 3;
+  }
+
+  int _randomShips(math.Random rand) => rand.nextInt(5) + 1; // 1–5
 
   // ─── Selection ────────────────────────────────────────────────────────────
 
