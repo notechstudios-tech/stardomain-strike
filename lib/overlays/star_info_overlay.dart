@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../components/star_component.dart';
 import '../game/stardomain_game.dart';
 
 class StarInfoOverlay extends StatefulWidget {
@@ -11,14 +10,11 @@ class StarInfoOverlay extends StatefulWidget {
 }
 
 class _StarInfoOverlayState extends State<StarInfoOverlay> {
-  StarComponent? _star;
-
   @override
   void initState() {
     super.initState();
-    _star = widget.game.selectedStar;
-    widget.game.onStarSelected = (star) {
-      if (mounted) setState(() => _star = star);
+    widget.game.onStarSelected = (_) {
+      if (mounted) setState(() {});
     };
   }
 
@@ -30,7 +26,7 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final star = _star;
+    final star = widget.game.selectedStar;
     if (star == null) return const SizedBox.shrink();
 
     return Align(
@@ -46,16 +42,21 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _StatItem(label: 'Ships', value: '${star.ships}'),
-            const _Divider(),
+            _StatItem(label: 'Ships',     value: '${star.ships}'),
+            _divider(),
             _StatItem(label: 'Resources', value: '${star.resources}/turn'),
-            const _Divider(),
-            _StatItem(label: 'Defence', value: '${star.defence}'),
+            _divider(),
+            _StatItem(label: 'Defence',   value: '${star.defence}'),
           ],
         ),
       ),
     );
   }
+
+  Widget _divider() => Container(
+    width: 1, height: 36, color: Colors.blue.shade800,
+    margin: const EdgeInsets.symmetric(horizontal: 20),
+  );
 }
 
 class _StatItem extends StatelessWidget {
@@ -64,40 +65,13 @@ class _StatItem extends StatelessWidget {
   const _StatItem({required this.label, required this.value});
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            decoration: TextDecoration.none,
-          ),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.blue.shade200,
-            fontSize: 11,
-            decoration: TextDecoration.none,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _Divider extends StatelessWidget {
-  const _Divider();
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 1,
-        height: 36,
-        color: Colors.blue.shade800,
-        margin: const EdgeInsets.symmetric(horizontal: 20),
-      );
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(value, style: const TextStyle(color: Colors.white, fontSize: 22,
+          fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+      Text(label, style: TextStyle(color: Colors.blue.shade200, fontSize: 11,
+          decoration: TextDecoration.none)),
+    ],
+  );
 }

@@ -6,6 +6,7 @@ import 'overlays/menu_overlay.dart';
 import 'overlays/hud_overlay.dart';
 import 'overlays/message_overlay.dart';
 import 'overlays/star_info_overlay.dart';
+import 'overlays/action_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,6 +82,7 @@ class _InputWrapperState extends State<_InputWrapper> {
           StardomainGame.overlayMessage: (_, g) => MessageOverlay(game: g),
           StardomainGame.overlayHud: (_, g) => HudOverlay(game: g),
           StardomainGame.overlayStarInfo: (_, g) => StarInfoOverlay(game: g),
+          StardomainGame.overlayAction:   (_, g) => ActionOverlay(game: g),
         },
       ),
     );

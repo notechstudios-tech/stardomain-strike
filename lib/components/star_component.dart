@@ -3,13 +3,14 @@ import '../models/star_config.dart';
 
 class StarComponent extends SpriteComponent {
   final StarConfig config;
-  bool isSelected = false;
+  String? owner; // mutable so captures work
   int ships;
   int resources;
   int defence;
 
   StarComponent({required this.config, required Sprite sprite})
-      : ships = config.ships,
+      : owner = config.owner,
+        ships = config.ships,
         resources = config.resources,
         defence = config.defence,
         super(sprite: sprite, anchor: Anchor.center);

@@ -29,7 +29,8 @@ class _MessageOverlayState extends State<MessageOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return Align(
+      alignment: const Alignment(0, -0.6),
       child: Text(
         _text,
         textAlign: TextAlign.center,
