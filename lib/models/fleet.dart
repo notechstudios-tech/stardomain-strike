@@ -6,6 +6,7 @@ class Fleet {
   final StarComponent destination;
   int ships;
   int turnsRemaining;
+  final int totalTurns;
 
   Fleet({
     required this.owner,
@@ -13,5 +14,5 @@ class Fleet {
     required this.destination,
     required this.ships,
     required this.turnsRemaining,
-  });
+  }) : totalTurns = turnsRemaining;
 }

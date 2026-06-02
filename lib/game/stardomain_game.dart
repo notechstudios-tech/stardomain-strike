@@ -1,8 +1,11 @@
 import 'dart:math' as math;
+import 'dart:ui' show Color;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../components/capture_ring.dart';
 import '../components/connection_line.dart';
+import '../components/fleet_marker.dart';
 import '../components/star_component.dart';
 import '../models/fleet.dart';
 import '../models/star_config.dart';
@@ -11,16 +14,16 @@ import '../services/ads_service.dart';
 enum GameState { menu, playing, transitioning }
 
 class StardomainGame extends FlameGame {
-  static const String overlayMenu    = 'menu';
-  static const String overlayMessage = 'message';
-  static const String overlayHud     = 'hud';
+  static const String overlayMenu     = 'menu';
+  static const String overlayMessage  = 'message';
+  static const String overlayHud      = 'hud';
   static const String overlayStarInfo = 'starInfo';
-  static const String overlayAction  = 'action';
+  static const String overlayAction   = 'action';
 
-  static const double universeWidth  = 3200;
-  static const double universeHeight = 1600;
+  static const double universeWidth   = 3200;
+  static const double universeHeight  = 1600;
   static const int    neutralStarCount = 160;
-  static const double travelSpeed    = 400.0; // world units per turn
+  static const double travelSpeed     = 400.0;
 
   static const double playerStarX = 800;
   static const double playerStarY = 800;
@@ -29,19 +32,22 @@ class StardomainGame extends FlameGame {
 
   final AdsService adsService = AdsService();
 
-  GameState _state = GameState.menu;
-  int _currentTurn = 1;
+  GameState _state      = GameState.menu;
+  int       _currentTurn = 1;
 
-  final List<StarComponent> _stars  = [];
-  final List<Fleet>         _fleets = [];
+  final List<StarComponent>              _stars        = [];
+  final List<Fleet>                      _fleets       = [];
+  final Map<Fleet, FleetMarker>          _fleetMarkers = {};
+  final Map<StarComponent, CaptureRing>  _captureRings = {};
 
-  // Selection state
-  StarComponent?   _selectedStar;   // player's "from" star
-  StarComponent?   _targetStar;     // any "to" star
-  SpriteComponent? _ring1;          // ring on _selectedStar
-  SpriteComponent? _ring2;          // ring on _targetStar
+  // Selection
+  StarComponent?   _selectedStar;
+  StarComponent?   _targetStar;
+  SpriteComponent? _ring1;
+  SpriteComponent? _ring2;
   ConnectionLine?  _connectionLine;
   int              _shipsToSend = 0;
+  FleetMarker?     _selectedMarker;
 
   final Map<String, Sprite> _sprites = {};
   final AudioPlayer _bgm = AudioPlayer();
@@ -49,22 +55,16 @@ class StardomainGame extends FlameGame {
 
   String messageText = '';
 
-  // Overlay callbacks
   void Function(String)? onMessageChanged;
   void Function()?       onHudChanged;
   void Function()?       onActionChanged;
   void Function(StarComponent?)? onStarSelected;
 
-  // ─── Public accessors used by overlays ───────────────────────────────────
+  // ─── Public accessors ────────────────────────────────────────────────────
 
-  int get currentTurn => _currentTurn;
-
-  int get totalPlayerShips => _stars
-      .where((s) => s.owner == 'player' && s.isMounted)
-      .fold(0, (sum, s) => sum + s.ships);
-
-  int get totalPlayerStars =>
-      _stars.where((s) => s.owner == 'player' && s.isMounted).length;
+  int get currentTurn      => _currentTurn;
+  int get totalPlayerShips => _stars.where((s) => s.owner == 'player' && s.isMounted).fold(0, (sum, s) => sum + s.ships);
+  int get totalPlayerStars => _stars.where((s) => s.owner == 'player' && s.isMounted).length;
 
   StarComponent? get selectedStar => _selectedStar;
   StarComponent? get targetStar   => _targetStar;
@@ -72,92 +72,200 @@ class StardomainGame extends FlameGame {
 
   int get distanceInTurns {
     if (_selectedStar == null || _targetStar == null) return 0;
-    final dx = _selectedStar!.position.x - _targetStar!.position.x;
-    final dy = _selectedStar!.position.y - _targetStar!.position.y;
-    return math.max(1, (math.sqrt(dx * dx + dy * dy) / travelSpeed).ceil());
+    final d = (_selectedStar!.position - _targetStar!.position).length;
+    return math.max(1, (d / travelSpeed).ceil());
   }
 
   void increaseShips() {
-    if (_selectedStar == null) return;
-    if (_shipsToSend < _selectedStar!.ships) {
-      _shipsToSend++;
-      onActionChanged?.call();
-    }
+    if (_selectedStar == null || _shipsToSend >= _selectedStar!.ships) return;
+    _shipsToSend++;
+    onActionChanged?.call();
   }
 
   void decreaseShips() {
-    if (_shipsToSend > 1) {
-      _shipsToSend--;
-      onActionChanged?.call();
-    }
+    if (_shipsToSend <= 1) return;
+    _shipsToSend--;
+    onActionChanged?.call();
   }
 
   void sendFleet() {
     if (_selectedStar == null || _targetStar == null || _shipsToSend <= 0) return;
     if (_selectedStar!.ships < _shipsToSend) return;
-
     _selectedStar!.ships -= _shipsToSend;
-    _fleets.add(Fleet(
+    final fleet = Fleet(
       owner: 'player',
       origin: _selectedStar!,
       destination: _targetStar!,
       ships: _shipsToSend,
       turnsRemaining: distanceInTurns,
-    ));
-
+    );
+    _fleets.add(fleet);
+    _addFleetMarker(fleet);
     _sfx.play(AssetSource('sound/select.wav'));
     _deselectAll();
     onHudChanged?.call();
   }
+
+  // ─── Turn processing ──────────────────────────────────────────────────────
 
   Future<void> endTurn() async {
     if (_state != GameState.playing) return;
     _state = GameState.transitioning;
     _deselectAll();
 
+    final rand = math.Random();
+
     // 1. Player fleets advance
-    _advanceFleets('player');
+    _advanceFleets('player', rand);
 
     // 2. Player star production
-    for (final s in _stars.where((s) => s.owner == 'player')) {
+    for (final s in _stars.where((s) => s.owner == 'player' && s.isMounted)) {
       s.ships += s.resources;
     }
 
-    // 3. Enemy turn (passive: production + fleet movement)
-    for (final s in _stars.where((s) => s.owner != null && s.owner != 'player')) {
+    // 3. Enemy AI sends ships from each controlled star
+    _runEnemyAI(rand);
+
+    // 4. Enemy star production
+    for (final s in _stars.where((s) => _isEnemy(s.owner) && s.isMounted)) {
       s.ships += s.resources;
     }
-    _advanceFleets('enemy_red');
-    _advanceFleets('enemy_blue');
+
+    // 5. Enemy fleets advance
+    _advanceFleets('enemy_red', rand);
+    _advanceFleets('enemy_blue', rand);
+
+    // 6. Update all remaining fleet marker positions
+    for (final m in _fleetMarkers.values) {
+      if (m.isMounted) m.updatePosition();
+    }
 
     _currentTurn++;
     _state = GameState.playing;
     onHudChanged?.call();
   }
 
-  void _advanceFleets(String owner) {
-    final toRemove = <Fleet>[];
+  void _advanceFleets(String owner, math.Random rand) {
+    final arrived = <Fleet>[];
     for (final f in _fleets.where((f) => f.owner == owner)) {
       f.turnsRemaining--;
       if (f.turnsRemaining <= 0) {
-        _processArrival(f);
-        toRemove.add(f);
+        _processArrival(f, rand);
+        arrived.add(f);
       }
     }
-    _fleets.removeWhere(toRemove.contains);
+    for (final f in arrived) {
+      _removeFleetMarker(f);
+      _fleets.remove(f);
+    }
   }
 
-  void _processArrival(Fleet fleet) {
+  void _processArrival(Fleet fleet, math.Random rand) {
     final dest = fleet.destination;
+    if (!dest.isMounted) return;
+
     if (dest.owner == fleet.owner) {
       dest.ships += fleet.ships;
-    } else if (fleet.ships > dest.ships) {
-      dest.ships = fleet.ships - dest.ships;
+      onHudChanged?.call();
+      return;
+    }
+
+    // ─── Battle ───────────────────────────────────────────────────────────
+    int attackers = fleet.ships;
+    int defenders = dest.ships;
+    final defence = dest.defence;
+
+    while (attackers > 0 && defenders > 0) {
+      // Attacker hits: needs (6 + defence)+ on 1-10
+      final atkRoll = rand.nextInt(10) + 1;
+      final atkThreshold = math.min(10, 6 + defence);
+      if (atkRoll >= atkThreshold) defenders--;
+
+      if (defenders <= 0) break;
+
+      // Defender hits: needs 6+ on 1-10
+      if (rand.nextInt(10) + 1 >= 6) attackers--;
+    }
+
+    if (attackers > 0) {
+      dest.ships = attackers;
       dest.owner = fleet.owner;
+      _applyCaptureRing(dest, fleet.owner);
     } else {
-      dest.ships = math.max(0, dest.ships - fleet.ships);
+      dest.ships = math.max(0, defenders);
     }
     onHudChanged?.call();
+  }
+
+  // ─── Enemy AI ─────────────────────────────────────────────────────────────
+
+  void _runEnemyAI(math.Random rand) {
+    final enemyStars = _stars
+        .where((s) => _isEnemy(s.owner) && s.ships > 5 && s.isMounted)
+        .toList();
+
+    for (final star in enemyStars) {
+      // Sort non-enemy stars by distance
+      final targets = _stars
+          .where((s) => s.owner != star.owner && s.isMounted)
+          .toList()
+        ..sort((a, b) => (a.position - star.position).length2
+            .compareTo((b.position - star.position).length2));
+
+      if (targets.isEmpty) continue;
+
+      // Send to 1 or 2 nearest targets (random)
+      final numTargets = math.min(rand.nextInt(2) + 1, targets.length);
+      int available = star.ships;
+
+      for (int i = 0; i < numTargets && available > 3; i++) {
+        final shipsToSend = math.max(1, (available * 0.5).round());
+        if (shipsToSend <= 0) continue;
+        star.ships -= shipsToSend;
+        available  -= shipsToSend;
+
+        final target = targets[i];
+        final d = (star.position - target.position).length;
+        final turns = math.max(1, (d / travelSpeed).ceil());
+        final fleet = Fleet(
+          owner: star.owner!,
+          origin: star,
+          destination: target,
+          ships: shipsToSend,
+          turnsRemaining: turns,
+        );
+        _fleets.add(fleet);
+        _addFleetMarker(fleet);
+      }
+    }
+  }
+
+  // ─── Fleet marker helpers ─────────────────────────────────────────────────
+
+  void _addFleetMarker(Fleet fleet) {
+    final marker = FleetMarker(fleet: fleet)..updatePosition();
+    _fleetMarkers[fleet] = marker;
+    world.add(marker);
+  }
+
+  void _removeFleetMarker(Fleet fleet) {
+    _fleetMarkers.remove(fleet)?.removeFromParent();
+  }
+
+  // ─── Capture ring helpers ──────────────────────────────────────────────────
+
+  void _applyCaptureRing(StarComponent star, String owner) {
+    _captureRings.remove(star)?.removeFromParent();
+    final color = owner == 'player'
+        ? const Color(0xFF42A5F5) // blue
+        : const Color(0xFFEF5350); // red
+    final ring = CaptureRing(
+      color: color,
+      ringRadius: star.radius * 1.8,
+      starPosition: star.position.clone(),
+    );
+    _captureRings[star] = ring;
+    world.add(ring);
   }
 
   // ─── Input ────────────────────────────────────────────────────────────────
@@ -166,26 +274,44 @@ class StardomainGame extends FlameGame {
     if (_state != GameState.playing) return;
     final worldPos = camera.viewfinder.position + screenPos / camera.viewfinder.zoom;
 
+    // Fleet markers take priority
+    for (final marker in _fleetMarkers.values) {
+      if (!marker.isMounted) continue;
+      final d = worldPos - marker.position;
+      if (d.length2 <= (marker.radius * 2) * (marker.radius * 2)) {
+        _selectMarker(marker);
+        return;
+      }
+    }
+
+    // Stars
     for (final star in _stars) {
       if (!star.isMounted) continue;
-      final dx = worldPos.x - star.position.x;
-      final dy = worldPos.y - star.position.y;
-      final r = star.radius;
-      if (dx * dx + dy * dy <= r * r) {
+      final d = worldPos - star.position;
+      if (d.length2 <= star.radius * star.radius) {
         _onStarTapped(star);
         return;
       }
     }
+
     _deselectAll();
   }
 
+  void _selectMarker(FleetMarker marker) {
+    _deselectAll();
+    _selectedMarker?.isSelected = false;
+    marker.isSelected = true;
+    _selectedMarker = marker;
+  }
+
   void _onStarTapped(StarComponent star) {
+    _selectedMarker?.isSelected = false;
+    _selectedMarker = null;
+
     if (star.owner == 'player') {
-      // Always sets a new "from" star
       _clearConnection();
       _setFirstStar(star);
     } else if (_selectedStar != null) {
-      // Second star tapped — set as target
       _setTargetStar(star);
     } else {
       _deselectAll();
@@ -197,10 +323,8 @@ class StardomainGame extends FlameGame {
     final selSp = _sprites['select_green'];
     if (selSp != null) {
       _ring1 = SpriteComponent(
-        sprite: selSp,
-        position: star.position,
-        anchor: Anchor.center,
-        scale: star.scale * 1.5,
+        sprite: selSp, position: star.position,
+        anchor: Anchor.center, scale: star.scale * 1.5,
       );
       world.add(_ring1!);
     }
@@ -215,26 +339,20 @@ class StardomainGame extends FlameGame {
   void _setTargetStar(StarComponent star) {
     _ring2?.removeFromParent();
     _connectionLine?.removeFromParent();
-
     final selSp = _sprites['select_green'];
     if (selSp != null) {
       _ring2 = SpriteComponent(
-        sprite: selSp,
-        position: star.position,
-        anchor: Anchor.center,
-        scale: star.scale * 1.5,
+        sprite: selSp, position: star.position,
+        anchor: Anchor.center, scale: star.scale * 1.5,
       );
       world.add(_ring2!);
     }
-
     _connectionLine = ConnectionLine(
       from: _selectedStar!.position.clone(),
       to: star.position.clone(),
     );
     world.add(_connectionLine!);
-
     _targetStar = star;
-    // Clamp ships to send to what the source has
     _shipsToSend = _shipsToSend.clamp(1, _selectedStar!.ships);
     overlays.remove(overlayStarInfo);
     overlays.add(overlayAction);
@@ -253,32 +371,24 @@ class StardomainGame extends FlameGame {
     _ring1?.removeFromParent();
     _ring2?.removeFromParent();
     _connectionLine?.removeFromParent();
-    _ring1 = null;
-    _ring2 = null;
-    _connectionLine = null;
-    _selectedStar = null;
-    _targetStar = null;
-    _shipsToSend = 0;
+    _ring1 = null; _ring2 = null; _connectionLine = null;
+    _selectedStar = null; _targetStar = null; _shipsToSend = 0;
+    _selectedMarker?.isSelected = false;
+    _selectedMarker = null;
     overlays.remove(overlayStarInfo);
     overlays.remove(overlayAction);
     onStarSelected?.call(null);
     onActionChanged?.call();
   }
 
-  void handlePanZoom({
-    required Vector2 panDelta,
-    required double newZoom,
-    required Vector2 focal,
-  }) {
+  void handlePanZoom({required Vector2 panDelta, required double newZoom, required Vector2 focal}) {
     if (_state == GameState.menu) return;
     final oldZoom = camera.viewfinder.zoom;
     if ((newZoom - oldZoom).abs() > 0.001) {
       camera.viewfinder.position += focal * (1.0 / oldZoom - 1.0 / newZoom);
       camera.viewfinder.zoom = newZoom;
     }
-    if (panDelta.length2 > 0) {
-      camera.viewfinder.position -= panDelta / camera.viewfinder.zoom;
-    }
+    if (panDelta.length2 > 0) camera.viewfinder.position -= panDelta / camera.viewfinder.zoom;
     _clampCamera();
   }
 
@@ -304,13 +414,13 @@ class StardomainGame extends FlameGame {
   }
 
   Future<void> _loadSprites() async {
-    const imageNames = [
+    const names = [
       'star_light', 'star_medium', 'star_large',
       'nebula_red', 'nebula_blue', 'select_green',
       'enemy_blue', 'enemy_red', 'enemy_grey',
     ];
-    for (final name in imageNames) {
-      try { _sprites[name] = await Sprite.load('img/$name.png'); } catch (_) {}
+    for (final n in names) {
+      try { _sprites[n] = await Sprite.load('img/$n.png'); } catch (_) {}
     }
   }
 
@@ -323,11 +433,12 @@ class StardomainGame extends FlameGame {
     _spawnMenuStarfield();
     camera.viewfinder.position = Vector2.zero();
     camera.viewfinder.zoom = 1.0;
-    overlays.remove(overlayHud);
-    overlays.remove(overlayMessage);
-    overlays.remove(overlayStarInfo);
-    overlays.remove(overlayAction);
-    overlays.add(overlayMenu);
+    overlays
+      ..remove(overlayHud)
+      ..remove(overlayMessage)
+      ..remove(overlayStarInfo)
+      ..remove(overlayAction)
+      ..add(overlayMenu);
     _playMusic('Title_Music.wav');
   }
 
@@ -336,7 +447,7 @@ class StardomainGame extends FlameGame {
     final w = size.x; final h = size.y;
     for (final (name, count, scale) in <(String, int, double)>[
       ('star_light', 80, 2.0), ('star_medium', 40, 3.0), ('star_large', 15, 4.0),
-      ('nebula_red', 1, 5.0),  ('nebula_blue', 2, 5.0),
+      ('nebula_red', 1, 5.0), ('nebula_blue', 2, 5.0),
     ]) {
       final sp = _sprites[name];
       if (sp == null) continue;
@@ -344,8 +455,7 @@ class StardomainGame extends FlameGame {
         world.add(SpriteComponent(
           sprite: sp,
           position: Vector2(rand.nextDouble() * w, rand.nextDouble() * h),
-          anchor: Anchor.center,
-          scale: Vector2.all(scale),
+          anchor: Anchor.center, scale: Vector2.all(scale),
         ));
       }
     }
@@ -358,20 +468,12 @@ class StardomainGame extends FlameGame {
     overlays.add(overlayHud);
     _clearAll();
     _currentTurn = 1;
-    _fleets.clear();
     _state = GameState.transitioning;
     camera.viewfinder.zoom = 1.0;
-
-    // New random seed every game start
     _buildUniverse(math.Random(DateTime.now().millisecondsSinceEpoch));
-
     _stopMusic();
     _playMusic('level_music.wav');
-    camera.viewfinder.position = Vector2(
-      playerStarX - size.x / 2,
-      playerStarY - size.y / 2,
-    );
-
+    camera.viewfinder.position = Vector2(playerStarX - size.x / 2, playerStarY - size.y / 2);
     _showMessage('Home Star - Start!');
     await Future.delayed(const Duration(seconds: 2));
     overlays.remove(overlayMessage);
@@ -382,7 +484,6 @@ class StardomainGame extends FlameGame {
   // ─── Universe ─────────────────────────────────────────────────────────────
 
   void _buildUniverse(math.Random rand) {
-    // Nebulas
     for (final (name, count, scale) in <(String, int, double)>[
       ('nebula_red', 3, 6.0), ('nebula_blue', 4, 6.0),
     ]) {
@@ -397,7 +498,6 @@ class StardomainGame extends FlameGame {
       }
     }
 
-    // Atmospheric dots
     final bgSp = _sprites['star_light'];
     if (bgSp != null) {
       for (int i = 0; i < 160; i++) {
@@ -409,16 +509,11 @@ class StardomainGame extends FlameGame {
       }
     }
 
-    // Neutral interactive stars
     final n = neutralStarCount;
-    final largeN  = (n * 0.15).round();
-    final mediumN = (n * 0.35).round();
-    final lightN  = n - largeN - mediumN;
-    _spawnNeutralStars('star_large',  StarSize.large,  largeN,  rand);
-    _spawnNeutralStars('star_medium', StarSize.medium, mediumN, rand);
-    _spawnNeutralStars('star_light',  StarSize.light,  lightN,  rand);
+    _spawnNeutralStars('star_large',  StarSize.large,  (n * 0.15).round(), rand);
+    _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
+    _spawnNeutralStars('star_light',  StarSize.light,  n - (n * 0.15).round() - (n * 0.35).round(), rand);
 
-    // Fixed home stars
     _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
     _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
   }
@@ -426,23 +521,16 @@ class StardomainGame extends FlameGame {
   void _spawnNeutralStars(String spriteName, StarSize sz, int count, math.Random rand) {
     final sp = _sprites[spriteName];
     if (sp == null) return;
-    final scale = switch (sz) {
-      StarSize.light => 2.0, StarSize.medium => 3.0, StarSize.large => 4.0,
-    };
+    final scale = switch (sz) { StarSize.light => 2.0, StarSize.medium => 3.0, StarSize.large => 4.0 };
     for (int i = 0; i < count; i++) {
       double x, y;
       do {
-        x = rand.nextDouble() * (universeWidth  - 100) + 50;
+        x = rand.nextDouble() * (universeWidth - 100) + 50;
         y = rand.nextDouble() * (universeHeight - 100) + 50;
       } while (_tooCloseToHome(x, y));
-
       final star = StarComponent(
-        config: StarConfig(
-          size: sz, x: x, y: y,
-          ships:     _randomShips(rand),
-          resources: _randomResources(rand),
-          defence:   _randomDefence(rand),
-        ),
+        config: StarConfig(size: sz, x: x, y: y,
+            ships: _randomShips(rand), resources: _randomResources(rand), defence: _randomDefence(rand)),
         sprite: sp,
       )..position = Vector2(x, y)..scale = Vector2.all(scale);
       _stars.add(star);
@@ -458,14 +546,10 @@ class StardomainGame extends FlameGame {
     final starSp = _sprites['star_large'];
     final iconSp = _sprites[iconKey];
     if (starSp == null || iconSp == null) return;
-
     world.add(SpriteComponent(
-      sprite: starSp,
-      position: Vector2(x, y),
-      anchor: Anchor.center,
-      scale: Vector2.all(4.5),
+      sprite: starSp, position: Vector2(x, y),
+      anchor: Anchor.center, scale: Vector2.all(4.5),
     ));
-
     final star = StarComponent(
       config: StarConfig(size: StarSize.large, x: x, y: y, owner: owner,
           ships: ships, resources: resources, defence: defence),
@@ -477,25 +561,23 @@ class StardomainGame extends FlameGame {
 
   bool _tooCloseToHome(double x, double y) {
     const d = 150.0;
-    final dpx = x - playerStarX, dpy = y - playerStarY;
-    final dex = x - enemyStarX,  dey = y - enemyStarY;
+    final dpx = x - playerStarX; final dpy = y - playerStarY;
+    final dex = x - enemyStarX;  final dey = y - enemyStarY;
     return (dpx*dpx + dpy*dpy) < d*d || (dex*dex + dey*dey) < d*d;
   }
 
-  // ─── Seeding helpers ──────────────────────────────────────────────────────
+  bool _isEnemy(String? owner) => owner == 'enemy_red' || owner == 'enemy_blue';
+
+  // ─── Seeding ──────────────────────────────────────────────────────────────
 
   int _randomResources(math.Random r) {
     final v = r.nextDouble();
-    if (v < 0.80) return 1;
-    if (v < 0.95) return 2;
-    return 3;
+    return v < 0.80 ? 1 : v < 0.95 ? 2 : 3;
   }
 
   int _randomDefence(math.Random r) {
     final v = r.nextDouble();
-    if (v < 0.80) return 1;
-    if (v < 0.95) return 2;
-    return 3;
+    return v < 0.80 ? 1 : v < 0.95 ? 2 : 3;
   }
 
   int _randomShips(math.Random r) => r.nextInt(5) + 1;
@@ -510,19 +592,22 @@ class StardomainGame extends FlameGame {
 
   // ─── Audio ────────────────────────────────────────────────────────────────
 
-  void _playMusic(String filename) {
+  void _playMusic(String f) {
     _bgm.setReleaseMode(ReleaseMode.loop);
-    _bgm.play(AssetSource('sound/$filename'), volume: 0.6);
+    _bgm.play(AssetSource('sound/$f'), volume: 0.6);
   }
-
   void _stopMusic() => _bgm.stop();
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  // ─── Cleanup ──────────────────────────────────────────────────────────────
 
   void _clearAll() {
     _stars.clear();
+    _fleets.clear();
+    _fleetMarkers.clear();
+    _captureRings.clear();
     _ring1 = null; _ring2 = null; _connectionLine = null;
     _selectedStar = null; _targetStar = null; _shipsToSend = 0;
+    _selectedMarker = null;
     world.removeAll(world.children.toList());
   }
 }
