@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../game/stardomain_game.dart';
-import '../services/storage_service.dart';
 
 class MenuOverlay extends StatelessWidget {
   final StardomainGame game;
@@ -26,18 +25,12 @@ class MenuOverlay extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             GestureDetector(
-              onTap: () async {
-                final level = await StorageService.getSavedLevel();
-                game.startGame(level);
-              },
+              onTap: () => game.startGame(),
               child: Image.asset('assets/img/continue_button.png', width: 240),
             ),
             const SizedBox(height: 12),
             GestureDetector(
-              onTap: () {
-                StorageService.saveLevel(1);
-                game.startGame(1);
-              },
+              onTap: () => game.startGame(),
               child: Image.asset('assets/img/newgame_button.png', width: 240),
             ),
           ],

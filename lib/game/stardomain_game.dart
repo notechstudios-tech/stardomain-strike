@@ -3,8 +3,6 @@ import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../components/star_component.dart';
-import '../data/levels.dart';
-import '../models/level_config.dart';
 import '../models/star_config.dart';
 import '../services/ads_service.dart';
 
@@ -16,11 +14,10 @@ class StardomainGame extends FlameGame {
   static const String overlayHud = 'hud';
   static const String overlayStarInfo = 'starInfo';
 
-  // Universe is twice as wide as tall to fill the screen at max zoom-out
   static const double universeWidth = 3200;
   static const double universeHeight = 1600;
+  static const int neutralStarCount = 160;
 
-  // Fixed home star positions
   static const double playerStarX = 800;
   static const double playerStarY = 800;
   static const double enemyStarX = 2400;
@@ -29,10 +26,8 @@ class StardomainGame extends FlameGame {
   final AdsService adsService = AdsService();
 
   GameState _state = GameState.menu;
-  int currentLevel = 1;
   String messageText = '';
 
-  late LevelConfig _levelConfig;
   final List<StarComponent> _stars = [];
   SpriteComponent? _selector;
 
@@ -69,7 +64,7 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  // ─── Input (called from Flutter GestureDetector in main.dart) ────────────
+  // ─── Input ────────────────────────────────────────────────────────────────
 
   void handleTap(Vector2 screenPos) {
     if (_state != GameState.playing) return;
@@ -96,7 +91,6 @@ class StardomainGame extends FlameGame {
     if (_state == GameState.menu) return;
 
     final oldZoom = camera.viewfinder.zoom;
-
     if ((newZoom - oldZoom).abs() > 0.001) {
       camera.viewfinder.position += focal * (1.0 / oldZoom - 1.0 / newZoom);
       camera.viewfinder.zoom = newZoom;
@@ -160,27 +154,13 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  Future<void> startGame(int level) async {
-    currentLevel = level;
+  // ─── Game start ───────────────────────────────────────────────────────────
+
+  Future<void> startGame() async {
     overlays.remove(overlayMenu);
     overlays.add(overlayHud);
     _clearAll();
-    await _loadLevel();
-  }
-
-  // ─── Level loading ────────────────────────────────────────────────────────
-
-  Future<void> _loadLevel() async {
-    if (currentLevel > levels.length) {
-      _showMessage('You beat the game!');
-      await Future.delayed(const Duration(seconds: 2));
-      _showMenu();
-      return;
-    }
-
-    _levelConfig = levels[currentLevel - 1];
     _state = GameState.transitioning;
-    _clearAll();
     camera.viewfinder.zoom = 1.0;
     _buildUniverse();
     _stopMusic();
@@ -191,16 +171,17 @@ class StardomainGame extends FlameGame {
       playerStarY - size.y / 2,
     );
 
-    _showMessage(_levelConfig.text);
+    _showMessage('Home Star - Start!');
     await Future.delayed(const Duration(seconds: 2));
     overlays.remove(overlayMessage);
     _state = GameState.playing;
   }
 
+  // ─── Universe ─────────────────────────────────────────────────────────────
+
   void _buildUniverse() {
     final rand = math.Random();
 
-    // Background nebulas spread across full width
     for (final (name, count, scale) in <(String, int, double)>[
       ('nebula_red', 3, 6.0),
       ('nebula_blue', 4, 6.0),
@@ -210,39 +191,30 @@ class StardomainGame extends FlameGame {
       for (int i = 0; i < count; i++) {
         world.add(SpriteComponent(
           sprite: sp,
-          position: Vector2(
-            rand.nextDouble() * universeWidth,
-            rand.nextDouble() * universeHeight,
-          ),
+          position: Vector2(rand.nextDouble() * universeWidth, rand.nextDouble() * universeHeight),
           anchor: Anchor.center,
           scale: Vector2.all(scale),
         ));
       }
     }
 
-    // Atmospheric background dots
     final bgSp = _sprites['star_light'];
     if (bgSp != null) {
       for (int i = 0; i < 160; i++) {
         world.add(SpriteComponent(
           sprite: bgSp,
-          position: Vector2(
-            rand.nextDouble() * universeWidth,
-            rand.nextDouble() * universeHeight,
-          ),
+          position: Vector2(rand.nextDouble() * universeWidth, rand.nextDouble() * universeHeight),
           anchor: Anchor.center,
           scale: Vector2.all(1.5),
         ));
       }
     }
 
-    // Interactive neutral stars
-    final n = _levelConfig.neutralStarCount;
+    final n = neutralStarCount;
     _spawnNeutralStars('star_large', StarSize.large, (n * 0.15).round(), rand);
     _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
     _spawnNeutralStars('star_light', StarSize.light, n - (n * 0.15).round() - (n * 0.35).round(), rand);
 
-    // Fixed home stars
     _spawnOccupiedStar(
       x: playerStarX, y: playerStarY,
       owner: 'player', enemySprite: 'enemy_blue',
@@ -304,9 +276,8 @@ class StardomainGame extends FlameGame {
 
     final star = StarComponent(
       config: StarConfig(
-        size: StarSize.large, x: x, y: y,
-        owner: owner, ships: ships,
-        resources: resources, defence: defence,
+        size: StarSize.large, x: x, y: y, owner: owner,
+        ships: ships, resources: resources, defence: defence,
       ),
       sprite: iconSp,
     )
@@ -324,9 +295,8 @@ class StardomainGame extends FlameGame {
         (dex * dex + dey * dey) < minDist * minDist;
   }
 
-  // ─── Random seeding helpers ───────────────────────────────────────────────
+  // ─── Random seeding ───────────────────────────────────────────────────────
 
-  // 80% → 1, 15% → 2, 5% → 3
   int _randomResources(math.Random rand) {
     final r = rand.nextDouble();
     if (r < 0.80) return 1;
@@ -334,7 +304,6 @@ class StardomainGame extends FlameGame {
     return 3;
   }
 
-  // 80% → 1, 15% → 2, 5% → 3
   int _randomDefence(math.Random rand) {
     final r = rand.nextDouble();
     if (r < 0.80) return 1;
@@ -342,7 +311,7 @@ class StardomainGame extends FlameGame {
     return 3;
   }
 
-  int _randomShips(math.Random rand) => rand.nextInt(5) + 1; // 1–5
+  int _randomShips(math.Random rand) => rand.nextInt(5) + 1;
 
   // ─── Selection ────────────────────────────────────────────────────────────
 
@@ -380,7 +349,7 @@ class StardomainGame extends FlameGame {
     overlays.remove(overlayStarInfo);
   }
 
-  // ─── Message overlay ──────────────────────────────────────────────────────
+  // ─── Message ──────────────────────────────────────────────────────────────
 
   void _showMessage(String text) {
     messageText = text;
