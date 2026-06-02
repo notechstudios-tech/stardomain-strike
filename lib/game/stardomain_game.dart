@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'package:flame/components.dart';
-import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../components/star_component.dart';
@@ -11,12 +10,18 @@ import '../services/ads_service.dart';
 
 enum GameState { menu, playing, transitioning }
 
-class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
+class StardomainGame extends FlameGame {
   static const String overlayMenu = 'menu';
   static const String overlayMessage = 'message';
   static const String overlayHud = 'hud';
+  static const String overlayStarInfo = 'starInfo';
 
   static const double universeSize = 1600;
+  // Player star fixed at left-center, enemy at right-center
+  static const double playerStarX = 500;
+  static const double playerStarY = 800;
+  static const double enemyStarX = 1100;
+  static const double enemyStarY = 800;
 
   final AdsService adsService = AdsService();
 
@@ -27,6 +32,9 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
   late LevelConfig _levelConfig;
   final List<StarComponent> _stars = [];
   SpriteComponent? _selector;
+
+  StarComponent? selectedStar;
+  void Function(StarComponent?)? onStarSelected;
 
   final Map<String, Sprite> _sprites = {};
 
@@ -48,7 +56,6 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     const imageNames = [
       'star_light', 'star_medium', 'star_large',
       'nebula_red', 'nebula_blue',
-      'menu_title', 'continue_button', 'newgame_button',
       'select_green',
       'enemy_blue', 'enemy_red', 'enemy_grey',
     ];
@@ -59,6 +66,58 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     }
   }
 
+  // ─── Input (called from Flutter GestureDetector in main.dart) ────────────
+
+  void handleTap(Vector2 screenPos) {
+    if (_state != GameState.playing) return;
+    final worldPos = camera.viewfinder.position + screenPos / camera.viewfinder.zoom;
+
+    for (final star in _stars) {
+      if (!star.isMounted) continue;
+      final dx = worldPos.x - star.position.x;
+      final dy = worldPos.y - star.position.y;
+      final r = star.radius;
+      if (dx * dx + dy * dy <= r * r) {
+        _selectStar(star);
+        return;
+      }
+    }
+    _deselectStar();
+  }
+
+  void handlePanZoom({
+    required Vector2 panDelta,
+    required double newZoom,
+    required Vector2 focal,
+  }) {
+    if (_state == GameState.menu) return;
+
+    final oldZoom = camera.viewfinder.zoom;
+
+    // Zoom centered on the focal point
+    if ((newZoom - oldZoom).abs() > 0.001) {
+      camera.viewfinder.position += focal * (1.0 / oldZoom - 1.0 / newZoom);
+      camera.viewfinder.zoom = newZoom;
+    }
+
+    // Pan (convert screen delta to world units)
+    if (panDelta.length2 > 0) {
+      camera.viewfinder.position -= panDelta / camera.viewfinder.zoom;
+    }
+
+    _clampCamera();
+  }
+
+  void _clampCamera() {
+    final z = camera.viewfinder.zoom;
+    final maxX = (universeSize - size.x / z).clamp(0.0, universeSize);
+    final maxY = (universeSize - size.y / z).clamp(0.0, universeSize);
+    final pos = camera.viewfinder.position;
+    pos.x = pos.x.clamp(0.0, maxX);
+    pos.y = pos.y.clamp(0.0, maxY);
+    camera.viewfinder.position = pos;
+  }
+
   // ─── Menu ─────────────────────────────────────────────────────────────────
 
   void _showMenu() {
@@ -67,8 +126,10 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     _clearAll();
     _spawnMenuStarfield();
     camera.viewfinder.position = Vector2.zero();
+    camera.viewfinder.zoom = 1.0;
     overlays.remove(overlayHud);
     overlays.remove(overlayMessage);
+    overlays.remove(overlayStarInfo);
     overlays.add(overlayMenu);
     _playMusic('Title_Music.wav');
   }
@@ -78,14 +139,13 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     final screenW = size.x;
     final screenH = size.y;
 
-    final entries = <(String, int, double)>[
+    for (final (name, count, scale) in <(String, int, double)>[
       ('star_light', 80, 2.0),
       ('star_medium', 40, 3.0),
       ('star_large', 15, 4.0),
       ('nebula_red', 1, 5.0),
       ('nebula_blue', 2, 5.0),
-    ];
-    for (final (name, count, scale) in entries) {
+    ]) {
       final sp = _sprites[name];
       if (sp == null) continue;
       for (int i = 0; i < count; i++) {
@@ -120,13 +180,15 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     _levelConfig = levels[currentLevel - 1];
     _state = GameState.transitioning;
     _clearAll();
+    camera.viewfinder.zoom = 1.0;
     _buildUniverse();
     _stopMusic();
     _playMusic('level_music.wav');
 
+    // Start focused on the player's star
     camera.viewfinder.position = Vector2(
-      universeSize / 2 - size.x / 2,
-      universeSize / 2 - size.y / 2,
+      playerStarX - size.x / 2,
+      playerStarY - size.y / 2,
     );
 
     _showMessage(_levelConfig.text);
@@ -155,24 +217,44 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
       }
     }
 
-    // Playable stars — mix of neutral and enemy-occupied
-    final total = _levelConfig.starCount;
-    final enemyCount = (total * _levelConfig.enemyFraction).round();
-    final neutralCount = total - enemyCount;
+    // Neutral stars (background dots for atmosphere + interactive ones)
+    final bgSp = _sprites['star_light'];
+    if (bgSp != null) {
+      for (int i = 0; i < 100; i++) {
+        world.add(SpriteComponent(
+          sprite: bgSp,
+          position: Vector2(rand.nextDouble() * universeSize, rand.nextDouble() * universeSize),
+          anchor: Anchor.center,
+          scale: Vector2.all(1.5),
+        ));
+      }
+    }
 
-    final lightN = (neutralCount * 0.45).round();
-    final mediumN = (neutralCount * 0.35).round();
-    final largeN = neutralCount - lightN - mediumN;
+    // Interactive neutral stars
+    final neutralCount = _levelConfig.neutralStarCount;
+    final largeCount = (neutralCount * 0.15).round();
+    final mediumCount = (neutralCount * 0.35).round();
+    final lightCount = neutralCount - largeCount - mediumCount;
 
-    _spawnNeutralStars('star_large', StarSize.large, largeN, rand);
-    _spawnNeutralStars('star_medium', StarSize.medium, mediumN, rand);
-    _spawnNeutralStars('star_light', StarSize.light, lightN, rand);
+    _spawnNeutralStars('star_large', StarSize.large, largeCount, rand);
+    _spawnNeutralStars('star_medium', StarSize.medium, mediumCount, rand);
+    _spawnNeutralStars('star_light', StarSize.light, lightCount, rand);
 
-    // Enemy stars: half red, half blue
-    final redCount = enemyCount ~/ 2;
-    final blueCount = enemyCount - redCount;
-    _spawnEnemyStars('enemy_red', StarSize.large, redCount, rand);
-    _spawnEnemyStars('enemy_blue', StarSize.large, blueCount, rand);
+    // Player's home star (blue)
+    _spawnOccupiedStar(
+      x: playerStarX, y: playerStarY,
+      owner: 'player',
+      enemySprite: 'enemy_blue',
+      ships: 10, resources: 5, defence: 1,
+    );
+
+    // Enemy's home star (red)
+    _spawnOccupiedStar(
+      x: enemyStarX, y: enemyStarY,
+      owner: 'enemy_red',
+      enemySprite: 'enemy_red',
+      ships: 10, resources: 5, defence: 1,
+    );
   }
 
   void _spawnNeutralStars(String spriteName, StarSize sz, int count, math.Random rand) {
@@ -184,9 +266,18 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
       StarSize.large => 4.0,
     };
     for (int i = 0; i < count; i++) {
-      final x = rand.nextDouble() * (universeSize - 100) + 50;
-      final y = rand.nextDouble() * (universeSize - 100) + 50;
-      final star = StarComponent(config: StarConfig(size: sz, x: x, y: y), sprite: sp)
+      double x, y;
+      // Keep neutral stars away from the fixed home stars
+      do {
+        x = rand.nextDouble() * (universeSize - 100) + 50;
+        y = rand.nextDouble() * (universeSize - 100) + 50;
+      } while (_tooCloseToHome(x, y));
+
+      final resources = rand.nextInt(6) + 2; // 2–7
+      final star = StarComponent(
+        config: StarConfig(size: sz, x: x, y: y, resources: resources),
+        sprite: sp,
+      )
         ..position = Vector2(x, y)
         ..scale = Vector2.all(scale);
       _stars.add(star);
@@ -194,56 +285,54 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
     }
   }
 
-  void _spawnEnemyStars(String spriteName, StarSize sz, int count, math.Random rand) {
-    final sp = _sprites[spriteName];
-    if (sp == null) return;
-    for (int i = 0; i < count; i++) {
-      final x = rand.nextDouble() * (universeSize - 100) + 50;
-      final y = rand.nextDouble() * (universeSize - 100) + 50;
-      final star = StarComponent(
-        config: StarConfig(size: sz, x: x, y: y, owner: spriteName),
-        sprite: sp,
-      )
-        ..position = Vector2(x, y)
-        ..scale = Vector2.all(3.5);
-      _stars.add(star);
-      world.add(star);
-    }
+  void _spawnOccupiedStar({
+    required double x,
+    required double y,
+    required String owner,
+    required String enemySprite,
+    required int ships,
+    required int resources,
+    required int defence,
+  }) {
+    final starSp = _sprites['star_large'];
+    final iconSp = _sprites[enemySprite];
+    if (starSp == null || iconSp == null) return;
+
+    // Star body underneath
+    world.add(SpriteComponent(
+      sprite: starSp,
+      position: Vector2(x, y),
+      anchor: Anchor.center,
+      scale: Vector2.all(4.5),
+    ));
+
+    // Owner icon on top (slightly smaller so star peeks out)
+    final star = StarComponent(
+      config: StarConfig(
+        size: StarSize.large,
+        x: x, y: y,
+        owner: owner,
+        ships: ships,
+        resources: resources,
+        defence: defence,
+      ),
+      sprite: iconSp,
+    )
+      ..position = Vector2(x, y)
+      ..scale = Vector2.all(3.0);
+    _stars.add(star);
+    world.add(star);
   }
 
-  // ─── Input ────────────────────────────────────────────────────────────────
-
-  @override
-  void onTapDown(TapDownEvent event) {
-    if (_state != GameState.playing) return;
-    final worldPos = camera.viewfinder.position + event.localPosition;
-
-    for (final star in _stars) {
-      if (!star.isMounted) continue;
-      final dx = worldPos.x - star.position.x;
-      final dy = worldPos.y - star.position.y;
-      final r = star.radius;
-      if (dx * dx + dy * dy <= r * r) {
-        _selectStar(star);
-        return;
-      }
-    }
+  bool _tooCloseToHome(double x, double y) {
+    const minDist = 120.0;
+    final dpx = x - playerStarX, dpy = y - playerStarY;
+    final dex = x - enemyStarX, dey = y - enemyStarY;
+    return (dpx * dpx + dpy * dpy) < minDist * minDist ||
+        (dex * dex + dey * dey) < minDist * minDist;
   }
 
-  @override
-  void onDragUpdate(DragUpdateEvent event) {
-    super.onDragUpdate(event);
-    if (_state == GameState.menu) return;
-    camera.viewfinder.position -= event.localDelta;
-    _clampCamera();
-  }
-
-  void _clampCamera() {
-    final pos = camera.viewfinder.position;
-    pos.x = pos.x.clamp(0.0, universeSize - size.x);
-    pos.y = pos.y.clamp(0.0, universeSize - size.y);
-    camera.viewfinder.position = pos;
-  }
+  // ─── Selection ────────────────────────────────────────────────────────────
 
   void _selectStar(StarComponent star) {
     _sfx.play(AssetSource('sound/select.wav'));
@@ -256,10 +345,27 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
         sprite: selSp,
         position: star.position,
         anchor: Anchor.center,
-        scale: star.scale * 1.4,
+        scale: star.scale * 1.5,
       );
       world.add(_selector!);
     }
+
+    selectedStar = star;
+    onStarSelected?.call(star);
+
+    if (star.config.owner == 'player') {
+      overlays.add(overlayStarInfo);
+    } else {
+      overlays.remove(overlayStarInfo);
+    }
+  }
+
+  void _deselectStar() {
+    _selector?.removeFromParent();
+    _selector = null;
+    selectedStar = null;
+    onStarSelected?.call(null);
+    overlays.remove(overlayStarInfo);
   }
 
   // ─── Message overlay ──────────────────────────────────────────────────────
@@ -284,6 +390,7 @@ class StardomainGame extends FlameGame with TapCallbacks, DragCallbacks {
   void _clearAll() {
     _stars.clear();
     _selector = null;
+    selectedStar = null;
     world.removeAll(world.children.toList());
   }
 }
