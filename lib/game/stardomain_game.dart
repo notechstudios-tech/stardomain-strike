@@ -15,6 +15,14 @@ import '../services/ads_service.dart';
 
 enum GameState { menu, playing, transitioning }
 
+enum WinResult {
+  playerElimination, // player destroyed all enemy stars
+  playerConquest,    // player controls 80% of stars
+  playerDominance,   // player has ≥20 stars and 4× stars & ships → enemy surrenders
+  enemyConquest,     // enemy controls 80% of stars
+  playerDefeated,    // player has no stars left
+}
+
 class StardomainGame extends FlameGame {
   static const String overlayMenu         = 'menu';
   static const String overlayMessage      = 'message';
@@ -22,6 +30,7 @@ class StardomainGame extends FlameGame {
   static const String overlayStarInfo     = 'starInfo';
   static const String overlayAction       = 'action';
   static const String overlayBattleReport = 'battleReport';
+  static const String overlayGameResult   = 'gameResult';
 
   static const double universeWidth   = 3200;
   static const double universeHeight  = 1600;
@@ -52,6 +61,9 @@ class StardomainGame extends FlameGame {
   final List<PositionComponent>          _battleMarkers = [];
 
   Completer<void>? _battleReportCompleter;
+
+  WinResult? _gameResult;
+  WinResult? get gameResult => _gameResult;
 
   // Selection
   StarComponent?   _selectedStar;
@@ -173,7 +185,14 @@ class StardomainGame extends FlameGame {
     for (final m in _battleMarkers) { m.removeFromParent(); }
     _battleMarkers.clear();
 
-    // 7. Brief turn-start pause
+    // 7. Check win / lose conditions
+    final winResult = _checkWinConditions();
+    if (winResult != null) {
+      _handleGameEnd(winResult);
+      return;
+    }
+
+    // 8. Brief turn-start pause
     _showMessage('Turn $_currentTurn start!');
     await Future.delayed(const Duration(seconds: 3));
     overlays.remove(overlayMessage);
@@ -186,6 +205,44 @@ class StardomainGame extends FlameGame {
     overlays.remove(overlayBattleReport);
     _battleReportCompleter?.complete();
     _battleReportCompleter = null;
+  }
+
+  void backToMenu() => _showMenu();
+
+  WinResult? _checkWinConditions() {
+    final allStars      = _stars.where((s) => s.isMounted).toList();
+    final total         = allStars.length;
+    if (total == 0) return null;
+
+    final playerStarCount = allStars.where((s) => s.owner == 'player').length;
+    final enemyStarCount  = allStars.where((s) => _isEnemy(s.owner)).length;
+
+    // Elimination
+    if (enemyStarCount == 0 && playerStarCount > 0) return WinResult.playerElimination;
+    if (playerStarCount == 0)                        return WinResult.playerDefeated;
+
+    // 80% conquest
+    final threshold = (total * 0.8).ceil();
+    if (playerStarCount >= threshold) return WinResult.playerConquest;
+    if (enemyStarCount  >= threshold) return WinResult.enemyConquest;
+
+    // Dominance surrender: ≥20 stars and 4× stars AND 4× total ships (stars + fleets)
+    if (playerStarCount >= 20 && playerStarCount >= enemyStarCount * 4) {
+      final playerShips = allStars.where((s) => s.owner == 'player').fold(0, (n, s) => n + s.ships)
+          + _fleets.where((f) => f.owner == 'player').fold(0, (n, f) => n + f.ships);
+      final enemyShips  = allStars.where((s) => _isEnemy(s.owner)).fold(0, (n, s) => n + s.ships)
+          + _fleets.where((f) => _isEnemy(f.owner)).fold(0, (n, f) => n + f.ships);
+      if (enemyShips == 0 || playerShips >= enemyShips * 4) return WinResult.playerDominance;
+    }
+
+    return null;
+  }
+
+  void _handleGameEnd(WinResult result) {
+    _gameResult = result;
+    overlays.remove(overlayHud);
+    overlays.remove(overlayMessage);
+    overlays.add(overlayGameResult);
   }
 
   void _advanceFleets(String owner, math.Random rand) {
@@ -520,6 +577,7 @@ class StardomainGame extends FlameGame {
       ..remove(overlayMessage)
       ..remove(overlayStarInfo)
       ..remove(overlayAction)
+      ..remove(overlayGameResult)
       ..add(overlayMenu);
     _playMusic('Title_Music.wav');
   }
