@@ -26,8 +26,11 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final star = widget.game.selectedStar;
+    final game = widget.game;
+    final star = game.selectedStar;
     if (star == null) return const SizedBox.shrink();
+
+    final inTransit = game.shipsInTransitFrom(star);
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -42,11 +45,19 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _StatItem(label: 'Ships',     value: '${star.ships}'),
+            _StatItem(label: 'Ships', value: '${star.ships}'),
             _divider(),
+            if (inTransit > 0) ...[
+              _StatItem(
+                label: 'In Transit',
+                value: '$inTransit',
+                valueColor: Colors.orange.shade300,
+              ),
+              _divider(),
+            ],
             _StatItem(label: 'Resources', value: '${star.resources}/turn'),
             _divider(),
-            _StatItem(label: 'Defence',   value: '${star.defence}'),
+            _StatItem(label: 'Defence', value: '${star.defence}'),
           ],
         ),
       ),
@@ -54,24 +65,40 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
   }
 
   Widget _divider() => Container(
-    width: 1, height: 36, color: Colors.blue.shade800,
-    margin: const EdgeInsets.symmetric(horizontal: 20),
-  );
+        width: 1,
+        height: 36,
+        color: Colors.blue.shade800,
+        margin: const EdgeInsets.symmetric(horizontal: 20),
+      );
 }
 
 class _StatItem extends StatelessWidget {
   final String label;
   final String value;
-  const _StatItem({required this.label, required this.value});
+  final Color? valueColor;
+  const _StatItem({required this.label, required this.value, this.valueColor});
 
   @override
   Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(value, style: const TextStyle(color: Colors.white, fontSize: 22,
-          fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-      Text(label, style: TextStyle(color: Colors.blue.shade200, fontSize: 11,
-          decoration: TextDecoration.none)),
-    ],
-  );
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              color: valueColor ?? Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none,
+            ),
+          ),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.blue.shade200,
+              fontSize: 11,
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ],
+      );
 }

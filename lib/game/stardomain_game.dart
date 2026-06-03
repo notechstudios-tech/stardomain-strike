@@ -70,6 +70,10 @@ class StardomainGame extends FlameGame {
   StarComponent? get targetStar   => _targetStar;
   int get shipsToSend => _shipsToSend;
 
+  int shipsInTransitFrom(StarComponent star) => _fleets
+      .where((f) => f.origin == star && f.owner == 'player')
+      .fold(0, (sum, f) => sum + f.ships);
+
   int get distanceInTurns {
     if (_selectedStar == null || _targetStar == null) return 0;
     final d = (_selectedStar!.position - _targetStar!.position).length;
@@ -115,27 +119,26 @@ class StardomainGame extends FlameGame {
 
     final rand = math.Random();
 
-    // 1. Player fleets advance
+    // 1. Player fleets advance and battle (before any production)
     _advanceFleets('player', rand);
 
-    // 2. Player star production
+    // 2. Enemy AI sends ships
+    _runEnemyAI(rand);
+
+    // 3. Enemy fleets advance and battle
+    _advanceFleets('enemy_red', rand);
+    _advanceFleets('enemy_blue', rand);
+
+    // 4. Production runs AFTER all battles so the player clearly sees
+    //    the battle outcome before new ships are added.
     for (final s in _stars.where((s) => s.owner == 'player' && s.isMounted)) {
       s.ships += s.resources;
     }
-
-    // 3. Enemy AI sends ships from each controlled star
-    _runEnemyAI(rand);
-
-    // 4. Enemy star production
     for (final s in _stars.where((s) => _isEnemy(s.owner) && s.isMounted)) {
       s.ships += s.resources;
     }
 
-    // 5. Enemy fleets advance
-    _advanceFleets('enemy_red', rand);
-    _advanceFleets('enemy_blue', rand);
-
-    // 6. Update all remaining fleet marker positions
+    // 5. Update all remaining fleet marker positions
     for (final m in _fleetMarkers.values) {
       if (m.isMounted) m.updatePosition();
     }
