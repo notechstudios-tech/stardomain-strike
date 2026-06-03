@@ -23,7 +23,7 @@ class GameResultOverlay extends StatelessWidget {
       WinResult.playerConquest =>
           'You have conquered the galaxy!',
       WinResult.playerDominance =>
-          'Your Opponent bows to your might\nand surrenders!',
+          'Your opponent bows to your might\nand surrenders!',
       WinResult.enemyConquest =>
           'The enemy has conquered\nthe galaxy.',
       WinResult.playerDefeated =>
