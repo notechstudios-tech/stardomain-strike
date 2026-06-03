@@ -141,6 +141,12 @@ class StardomainGame extends FlameGame {
     }
 
     _currentTurn++;
+
+    // Brief turn-start pause (turn 1 already shows its own message on game start)
+    _showMessage('Turn $_currentTurn start!');
+    await Future.delayed(const Duration(seconds: 3));
+    overlays.remove(overlayMessage);
+
     _state = GameState.playing;
     onHudChanged?.call();
   }
@@ -187,12 +193,13 @@ class StardomainGame extends FlameGame {
       if (rand.nextInt(10) + 1 >= 6) attackers--;
     }
 
+    // Surviving ships stay at the star — not the starting count, the remainder
     if (attackers > 0) {
-      dest.ships = attackers;
+      dest.ships = attackers; // surviving attackers inherit the star
       dest.owner = fleet.owner;
       _applyCaptureRing(dest, fleet.owner);
     } else {
-      dest.ships = math.max(0, defenders);
+      dest.ships = defenders; // surviving defenders hold the star
     }
     onHudChanged?.call();
   }
