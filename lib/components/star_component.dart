@@ -20,17 +20,33 @@ class StarComponent extends SpriteComponent {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    // Each star gets a slightly different period so they shimmer out of sync
-    final period = 1.2 + (config.x * 0.007 + config.y * 0.011) % 1.3;
-    add(ScaleEffect.by(
-      Vector2.all(1.15),
-      EffectController(
-        duration: period,
-        reverseDuration: period,
-        infinite: true,
-        curve: Curves.easeInOut,
-      ),
-    ));
+    final phase = (config.x * 0.007 + config.y * 0.011) % 1.0;
+
+    if (config.size == StarSize.light) {
+      // Small stars: rapid opacity twinkle — scale change is invisible at this size
+      final period = 0.3 + phase * 0.7; // 0.3–1.0 s, each star different
+      add(OpacityEffect.by(
+        -0.82,
+        EffectController(
+          duration: period,
+          reverseDuration: period * 0.4, // quick flash back to bright
+          infinite: true,
+          curve: Curves.easeInOut,
+        ),
+      ));
+    } else {
+      // Medium/Large stars: scale pulse, clearly visible at these sizes
+      final period = 1.2 + phase * 1.3;
+      add(ScaleEffect.by(
+        Vector2.all(1.15),
+        EffectController(
+          duration: period,
+          reverseDuration: period,
+          infinite: true,
+          curve: Curves.easeInOut,
+        ),
+      ));
+    }
   }
 
   // Visual radius — used for rings, spacing, etc.
@@ -40,6 +56,5 @@ class StarComponent extends SpriteComponent {
   }
 
   // Tap radius — always at least 44 world units so small stars stay tappable.
-  // Larger stars grow naturally beyond this floor.
   double get tapRadius => radius < 44.0 ? 44.0 : radius;
 }
