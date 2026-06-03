@@ -1,4 +1,6 @@
 import 'package:flame/components.dart';
+import 'package:flame/effects.dart';
+import 'package:flutter/animation.dart';
 import '../models/star_config.dart';
 
 class StarComponent extends SpriteComponent {
@@ -14,6 +16,22 @@ class StarComponent extends SpriteComponent {
         resources = config.resources,
         defence = config.defence,
         super(sprite: sprite, anchor: Anchor.center);
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    // Each star gets a slightly different period so they shimmer out of sync
+    final period = 1.2 + (config.x * 0.007 + config.y * 0.011) % 1.3;
+    add(ScaleEffect.by(
+      Vector2.all(1.15),
+      EffectController(
+        duration: period,
+        reverseDuration: period,
+        infinite: true,
+        curve: Curves.easeInOut,
+      ),
+    ));
+  }
 
   // Visual radius — used for rings, spacing, etc.
   double get radius {
