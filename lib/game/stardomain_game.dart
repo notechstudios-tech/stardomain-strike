@@ -295,7 +295,7 @@ class StardomainGame extends FlameGame {
     for (final star in _stars) {
       if (!star.isMounted) continue;
       final d = worldPos - star.position;
-      if (d.length2 <= star.radius * star.radius) {
+      if (d.length2 <= star.tapRadius * star.tapRadius) {
         _onStarTapped(star);
         return;
       }
