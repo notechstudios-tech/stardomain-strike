@@ -11,7 +11,9 @@ import '../components/fleet_marker.dart';
 import '../components/star_component.dart';
 import '../models/fleet.dart';
 import '../models/star_config.dart';
+import '../models/game_save.dart';
 import '../services/ads_service.dart';
+import '../services/storage_service.dart';
 
 enum GameState { menu, playing, transitioning }
 
@@ -44,8 +46,9 @@ class StardomainGame extends FlameGame {
 
   final AdsService adsService = AdsService();
 
-  GameState _state      = GameState.menu;
-  int       _currentTurn = 1;
+  GameState _state          = GameState.menu;
+  int       _currentTurn    = 1;
+  int       _universeRngSeed = 0;
 
   // Cumulative battle statistics
   int battlesWon  = 0;
@@ -197,6 +200,7 @@ class StardomainGame extends FlameGame {
     await Future.delayed(const Duration(seconds: 3));
     overlays.remove(overlayMessage);
 
+    unawaited(_saveGameState());
     _state = GameState.playing;
     onHudChanged?.call();
   }
@@ -243,6 +247,133 @@ class StardomainGame extends FlameGame {
     overlays.remove(overlayHud);
     overlays.remove(overlayMessage);
     overlays.add(overlayGameResult);
+    unawaited(StorageService.clearSave());
+  }
+
+  // ─── Persistence ──────────────────────────────────────────────────────────
+
+  Future<void> _saveGameState() async {
+    final starSaves = <StarSave>[];
+    for (final star in _stars) {
+      if (!star.isMounted) continue;
+      starSaves.add(StarSave(
+        x: star.position.x,
+        y: star.position.y,
+        size: switch (star.config.size) {
+          StarSize.light  => 'light',
+          StarSize.medium => 'medium',
+          StarSize.large  => 'large',
+        },
+        iconKey: _homeStarIconKey(star),
+        owner: star.owner,
+        ships: star.ships,
+        resources: star.resources,
+        defence: star.defence,
+      ));
+    }
+
+    final fleetSaves = <FleetSave>[];
+    for (final fleet in _fleets) {
+      final originIdx = _stars.indexOf(fleet.origin);
+      final destIdx   = _stars.indexOf(fleet.destination);
+      if (originIdx < 0 || destIdx < 0) continue;
+      fleetSaves.add(FleetSave(
+        originIndex: originIdx,
+        destIndex: destIdx,
+        owner: fleet.owner,
+        ships: fleet.ships,
+        turnsRemaining: fleet.turnsRemaining,
+        totalTurns: fleet.totalTurns,
+      ));
+    }
+
+    await StorageService.saveGame(GameSave(
+      turn: _currentTurn,
+      seed: _universeRngSeed,
+      stars: starSaves,
+      fleets: fleetSaves,
+    ));
+  }
+
+  // Home stars use icon sprites; neutral stars use star sprites.
+  // Infer by matching the two fixed home positions.
+  String? _homeStarIconKey(StarComponent star) {
+    const eps = 1.0;
+    if ((star.position.x - playerStarX).abs() < eps &&
+        (star.position.y - playerStarY).abs() < eps) { return 'enemy_blue'; }
+    if ((star.position.x - enemyStarX).abs() < eps &&
+        (star.position.y - enemyStarY).abs() < eps) { return 'enemy_red'; }
+    return null;
+  }
+
+  void _buildStarsFromSave(GameSave save) {
+    for (final ss in save.stars) {
+      final sz = switch (ss.size) {
+        'light'  => StarSize.light,
+        'medium' => StarSize.medium,
+        _        => StarSize.large,
+      };
+
+      final Sprite? sprite;
+      final double scale;
+
+      if (ss.iconKey != null) {
+        // Home-style star: place the large star background then the icon
+        final bgSp = _sprites['star_large'];
+        if (bgSp != null) {
+          world.add(SpriteComponent(
+            sprite: bgSp,
+            position: Vector2(ss.x, ss.y),
+            anchor: Anchor.center,
+            scale: Vector2.all(4.5),
+          ));
+        }
+        sprite = _sprites[ss.iconKey];
+        scale  = 3.0;
+      } else {
+        sprite = _sprites[switch (sz) {
+          StarSize.light  => 'star_light',
+          StarSize.medium => 'star_medium',
+          StarSize.large  => 'star_large',
+        }];
+        scale = switch (sz) {
+          StarSize.light  => 2.0,
+          StarSize.medium => 3.0,
+          StarSize.large  => 4.0,
+        };
+      }
+
+      if (sprite == null) continue;
+
+      final star = StarComponent(
+        config: StarConfig(
+          size: sz, x: ss.x, y: ss.y,
+          owner: ss.owner,
+          ships: ss.ships, resources: ss.resources, defence: ss.defence,
+        ),
+        sprite: sprite,
+      )..position = Vector2(ss.x, ss.y)..scale = Vector2.all(scale);
+
+      _stars.add(star);
+      world.add(star);
+
+      if (ss.owner != null) _applyCaptureRing(star, ss.owner!);
+    }
+
+    // Restore in-transit fleets
+    for (final fs in save.fleets) {
+      if (fs.originIndex >= _stars.length || fs.destIndex >= _stars.length) continue;
+      final fleet = Fleet(
+        owner: fs.owner,
+        origin: _stars[fs.originIndex],
+        destination: _stars[fs.destIndex],
+        ships: fs.ships,
+        turnsRemaining: fs.turnsRemaining,
+        totalTurns: fs.totalTurns,
+      );
+      _fleets.add(fleet);
+      _addFleetMarker(fleet);
+    }
   }
 
   void _advanceFleets(String owner, math.Random rand) {
@@ -610,7 +741,9 @@ class StardomainGame extends FlameGame {
     _currentTurn = 1;
     _state = GameState.transitioning;
     camera.viewfinder.zoom = 1.0;
-    _buildUniverse(math.Random(DateTime.now().millisecondsSinceEpoch));
+    _universeRngSeed = DateTime.now().millisecondsSinceEpoch;
+    _buildUniverse(math.Random(_universeRngSeed));
+    unawaited(StorageService.clearSave());
     _stopMusic();
     _playMusic('level_music.wav');
     camera.viewfinder.position = Vector2(playerStarX - size.x / 2, playerStarY - size.y / 2);
@@ -621,9 +754,53 @@ class StardomainGame extends FlameGame {
     onHudChanged?.call();
   }
 
+  Future<void> continueGame() async {
+    final save = await StorageService.loadGame();
+    if (save == null) { await startGame(); return; }
+
+    overlays.remove(overlayMenu);
+    overlays.add(overlayHud);
+    _clearAll();
+    _currentTurn = save.turn;
+    _universeRngSeed = save.seed;
+    _state = GameState.transitioning;
+    camera.viewfinder.zoom = 1.0;
+
+    _buildCosmetics(math.Random(save.seed));
+    _buildStarsFromSave(save);
+
+    _stopMusic();
+    _playMusic('level_music.wav');
+
+    final home = _stars.firstWhere(
+      (s) => s.owner == 'player',
+      orElse: () => _stars.first,
+    );
+    camera.viewfinder.position = Vector2(
+      home.position.x - size.x / 2,
+      home.position.y - size.y / 2,
+    );
+    _clampCamera();
+
+    _state = GameState.playing;
+    onHudChanged?.call();
+  }
+
   // ─── Universe ─────────────────────────────────────────────────────────────
 
   void _buildUniverse(math.Random rand) {
+    _buildCosmetics(rand);
+
+    final n = neutralStarCount;
+    _spawnNeutralStars('star_large',  StarSize.large,  (n * 0.15).round(), rand);
+    _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
+    _spawnNeutralStars('star_light',  StarSize.light,  n - (n * 0.15).round() - (n * 0.35).round(), rand);
+
+    _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
+    _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
+  }
+
+  void _buildCosmetics(math.Random rand) {
     for (final (name, count, scale) in <(String, int, double)>[
       ('nebula_red', 3, 6.0), ('nebula_blue', 4, 6.0),
     ]) {
@@ -637,7 +814,6 @@ class StardomainGame extends FlameGame {
         ));
       }
     }
-
     final bgSp = _sprites['star_light'];
     if (bgSp != null) {
       for (int i = 0; i < 160; i++) {
@@ -648,14 +824,6 @@ class StardomainGame extends FlameGame {
         ));
       }
     }
-
-    final n = neutralStarCount;
-    _spawnNeutralStars('star_large',  StarSize.large,  (n * 0.15).round(), rand);
-    _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
-    _spawnNeutralStars('star_light',  StarSize.light,  n - (n * 0.15).round() - (n * 0.35).round(), rand);
-
-    _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
-    _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
   }
 
   void _spawnNeutralStars(String spriteName, StarSize sz, int count, math.Random rand) {

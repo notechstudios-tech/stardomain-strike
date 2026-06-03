@@ -14,5 +14,6 @@ class Fleet {
     required this.destination,
     required this.ships,
     required this.turnsRemaining,
-  }) : totalTurns = turnsRemaining;
+    int? totalTurns,
+  }) : totalTurns = totalTurns ?? turnsRemaining;
 }

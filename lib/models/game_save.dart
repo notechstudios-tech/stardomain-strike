@@ -1,0 +1,104 @@
+import 'dart:convert';
+
+class StarSave {
+  final double x, y;
+  final String size;    // 'light' | 'medium' | 'large'
+  final String? iconKey; // non-null for home stars ('enemy_blue', 'enemy_red')
+  final String? owner;
+  final int ships, resources, defence;
+
+  const StarSave({
+    required this.x,
+    required this.y,
+    required this.size,
+    this.iconKey,
+    this.owner,
+    required this.ships,
+    required this.resources,
+    required this.defence,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'x': x, 'y': y, 'size': size, 'iconKey': iconKey, 'owner': owner,
+    'ships': ships, 'resources': resources, 'defence': defence,
+  };
+
+  factory StarSave.fromJson(Map<String, dynamic> j) => StarSave(
+    x: (j['x'] as num).toDouble(),
+    y: (j['y'] as num).toDouble(),
+    size: j['size'] as String,
+    iconKey: j['iconKey'] as String?,
+    owner: j['owner'] as String?,
+    ships: j['ships'] as int,
+    resources: j['resources'] as int,
+    defence: j['defence'] as int,
+  );
+}
+
+class FleetSave {
+  final int originIndex, destIndex;
+  final String owner;
+  final int ships, turnsRemaining, totalTurns;
+
+  const FleetSave({
+    required this.originIndex,
+    required this.destIndex,
+    required this.owner,
+    required this.ships,
+    required this.turnsRemaining,
+    required this.totalTurns,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'originIndex': originIndex,
+    'destIndex': destIndex,
+    'owner': owner,
+    'ships': ships,
+    'turnsRemaining': turnsRemaining,
+    'totalTurns': totalTurns,
+  };
+
+  factory FleetSave.fromJson(Map<String, dynamic> j) => FleetSave(
+    originIndex: j['originIndex'] as int,
+    destIndex: j['destIndex'] as int,
+    owner: j['owner'] as String,
+    ships: j['ships'] as int,
+    turnsRemaining: j['turnsRemaining'] as int,
+    totalTurns: j['totalTurns'] as int,
+  );
+}
+
+class GameSave {
+  final int turn;
+  final int seed;
+  final List<StarSave> stars;
+  final List<FleetSave> fleets;
+
+  const GameSave({
+    required this.turn,
+    required this.seed,
+    required this.stars,
+    required this.fleets,
+  });
+
+  String toJsonString() => jsonEncode({
+    'turn': turn,
+    'seed': seed,
+    'stars': stars.map((s) => s.toJson()).toList(),
+    'fleets': fleets.map((f) => f.toJson()).toList(),
+  });
+
+  factory GameSave.fromJsonString(String s) {
+    final j = jsonDecode(s) as Map<String, dynamic>;
+    return GameSave(
+      turn: j['turn'] as int,
+      seed: j['seed'] as int,
+      stars: (j['stars'] as List)
+          .map((e) => StarSave.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      fleets: (j['fleets'] as List)
+          .map((e) => FleetSave.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}

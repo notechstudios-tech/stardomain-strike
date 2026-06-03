@@ -1,15 +1,32 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/game_save.dart';
 
 class StorageService {
-  static const _levelKey = 'level';
+  static const _saveKey = 'game_save';
 
-  static Future<int> getSavedLevel() async {
+  static Future<bool> hasSavedGame() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_levelKey) ?? 1;
+    return prefs.containsKey(_saveKey);
   }
 
-  static Future<void> saveLevel(int level) async {
+  static Future<GameSave?> loadGame() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_levelKey, level);
+    final json = prefs.getString(_saveKey);
+    if (json == null) return null;
+    try {
+      return GameSave.fromJsonString(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> saveGame(GameSave save) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_saveKey, save.toJsonString());
+  }
+
+  static Future<void> clearSave() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_saveKey);
   }
 }
