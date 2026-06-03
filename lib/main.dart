@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flame/game.dart';
 import 'game/stardomain_game.dart';
+import 'overlays/battle_report_overlay.dart';
 import 'overlays/menu_overlay.dart';
 import 'overlays/hud_overlay.dart';
 import 'overlays/message_overlay.dart';
@@ -78,11 +79,12 @@ class _InputWrapperState extends State<_InputWrapper> {
       child: GameWidget<StardomainGame>(
         game: _game,
         overlayBuilderMap: {
-          StardomainGame.overlayMenu: (_, g) => MenuOverlay(game: g),
-          StardomainGame.overlayMessage: (_, g) => MessageOverlay(game: g),
-          StardomainGame.overlayHud: (_, g) => HudOverlay(game: g),
-          StardomainGame.overlayStarInfo: (_, g) => StarInfoOverlay(game: g),
-          StardomainGame.overlayAction:   (_, g) => ActionOverlay(game: g),
+          StardomainGame.overlayMenu:         (_, g) => MenuOverlay(game: g),
+          StardomainGame.overlayMessage:      (_, g) => MessageOverlay(game: g),
+          StardomainGame.overlayHud:          (_, g) => HudOverlay(game: g),
+          StardomainGame.overlayStarInfo:     (_, g) => StarInfoOverlay(game: g),
+          StardomainGame.overlayAction:       (_, g) => ActionOverlay(game: g),
+          StardomainGame.overlayBattleReport: (_, g) => BattleReportOverlay(game: g),
         },
       ),
     );

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show Color;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../components/battle_marker.dart';
 import '../components/capture_ring.dart';
 import '../components/connection_line.dart';
 import '../components/fleet_marker.dart';
@@ -14,11 +16,12 @@ import '../services/ads_service.dart';
 enum GameState { menu, playing, transitioning }
 
 class StardomainGame extends FlameGame {
-  static const String overlayMenu     = 'menu';
-  static const String overlayMessage  = 'message';
-  static const String overlayHud      = 'hud';
-  static const String overlayStarInfo = 'starInfo';
-  static const String overlayAction   = 'action';
+  static const String overlayMenu         = 'menu';
+  static const String overlayMessage      = 'message';
+  static const String overlayHud          = 'hud';
+  static const String overlayStarInfo     = 'starInfo';
+  static const String overlayAction       = 'action';
+  static const String overlayBattleReport = 'battleReport';
 
   static const double universeWidth   = 3200;
   static const double universeHeight  = 1600;
@@ -35,10 +38,20 @@ class StardomainGame extends FlameGame {
   GameState _state      = GameState.menu;
   int       _currentTurn = 1;
 
-  final List<StarComponent>              _stars        = [];
-  final List<Fleet>                      _fleets       = [];
-  final Map<Fleet, FleetMarker>          _fleetMarkers = {};
-  final Map<StarComponent, CaptureRing>  _captureRings = {};
+  // Cumulative battle statistics
+  int battlesWon  = 0;
+  int battlesLost = 0;
+  int starsGained = 0;
+  int starsLost   = 0;
+  int shipsLost   = 0;
+
+  final List<StarComponent>              _stars         = [];
+  final List<Fleet>                      _fleets        = [];
+  final Map<Fleet, FleetMarker>          _fleetMarkers  = {};
+  final Map<StarComponent, CaptureRing>  _captureRings  = {};
+  final List<PositionComponent>          _battleMarkers = [];
+
+  Completer<void>? _battleReportCompleter;
 
   // Selection
   StarComponent?   _selectedStar;
@@ -117,6 +130,11 @@ class StardomainGame extends FlameGame {
     _state = GameState.transitioning;
     _deselectAll();
 
+    // Clear previous turn's markers and reset per-turn stats before resolving the new turn
+    for (final m in _battleMarkers) { m.removeFromParent(); }
+    _battleMarkers.clear();
+    battlesWon = battlesLost = starsGained = starsLost = shipsLost = 0;
+
     final rand = math.Random();
 
     // 1. Player fleets advance and battle (before any production)
@@ -145,13 +163,29 @@ class StardomainGame extends FlameGame {
 
     _currentTurn++;
 
-    // Brief turn-start pause (turn 1 already shows its own message on game start)
+    // 6. Show battle report — user can pan/zoom to inspect markers on the map
+    _battleReportCompleter = Completer<void>();
+    overlays.add(overlayBattleReport);
+    await _battleReportCompleter!.future;
+    if (_state == GameState.menu) return;
+
+    // Remove markers now that the new turn begins
+    for (final m in _battleMarkers) { m.removeFromParent(); }
+    _battleMarkers.clear();
+
+    // 7. Brief turn-start pause
     _showMessage('Turn $_currentTurn start!');
     await Future.delayed(const Duration(seconds: 3));
     overlays.remove(overlayMessage);
 
     _state = GameState.playing;
     onHudChanged?.call();
+  }
+
+  void dismissBattleReport() {
+    overlays.remove(overlayBattleReport);
+    _battleReportCompleter?.complete();
+    _battleReportCompleter = null;
   }
 
   void _advanceFleets(String owner, math.Random rand) {
@@ -180,9 +214,12 @@ class StardomainGame extends FlameGame {
     }
 
     // ─── Battle ───────────────────────────────────────────────────────────
-    int attackers = fleet.ships;
-    int defenders = dest.ships;
-    final defence = dest.defence;
+    final prevOwner        = dest.owner;
+    int attackers          = fleet.ships;
+    final initialAttackers = attackers;
+    int defenders          = dest.ships;
+    final initialDefenders = defenders;
+    final defence          = dest.defence;
 
     while (attackers > 0 && defenders > 0) {
       // Attacker hits: needs (6 + defence)+ on 1-10
@@ -201,10 +238,42 @@ class StardomainGame extends FlameGame {
       dest.ships = attackers; // surviving attackers inherit the star
       dest.owner = fleet.owner;
       _applyCaptureRing(dest, fleet.owner);
+      // Track player-relevant outcomes
+      if (fleet.owner == 'player') {
+        battlesWon++;
+        starsGained++;
+        shipsLost += initialAttackers - attackers;
+        _addBattleMarker(dest, won: true);
+      } else if (prevOwner == 'player') {
+        // Enemy captured a player star
+        battlesLost++;
+        starsLost++;
+        shipsLost += initialDefenders;
+        _addBattleMarker(dest, won: false);
+      }
     } else {
       dest.ships = defenders; // surviving defenders hold the star
+      if (fleet.owner == 'player') {
+        // Player attack repelled
+        battlesLost++;
+        shipsLost += initialAttackers;
+        _addBattleMarker(dest, won: false);
+      }
     }
     onHudChanged?.call();
+  }
+
+  void _addBattleMarker(StarComponent star, {required bool won}) {
+    final r = math.max(20.0, star.radius);
+    if (won) {
+      final m = BattleWonMarker(starPosition: star.position.clone(), radius: r * 1.7);
+      _battleMarkers.add(m);
+      world.add(m);
+    } else {
+      final m = BattleLostMarker(starPosition: star.position.clone(), armLength: r * 1.2);
+      _battleMarkers.add(m);
+      world.add(m);
+    }
   }
 
   // ─── Enemy AI ─────────────────────────────────────────────────────────────
@@ -439,6 +508,9 @@ class StardomainGame extends FlameGame {
   void _showMenu() {
     _state = GameState.menu;
     _stopMusic();
+    overlays.remove(overlayBattleReport);
+    _battleReportCompleter?.complete();
+    _battleReportCompleter = null;
     _clearAll();
     _spawnMenuStarfield();
     camera.viewfinder.position = Vector2.zero();
@@ -615,9 +687,11 @@ class StardomainGame extends FlameGame {
     _fleets.clear();
     _fleetMarkers.clear();
     _captureRings.clear();
+    _battleMarkers.clear();
     _ring1 = null; _ring2 = null; _connectionLine = null;
     _selectedStar = null; _targetStar = null; _shipsToSend = 0;
     _selectedMarker = null;
+    battlesWon = battlesLost = starsGained = starsLost = shipsLost = 0;
     world.removeAll(world.children.toList());
   }
 }
