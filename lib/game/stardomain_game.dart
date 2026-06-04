@@ -434,30 +434,36 @@ class StardomainGame extends FlameGame {
     final arrived = <Fleet>[];
     for (final f in _fleets.where((f) => f.owner == owner)) {
       f.turnsRemaining--;
-      if (f.turnsRemaining <= 0) {
-        _processArrival(f, rand);
-        arrived.add(f);
-      }
+      if (f.turnsRemaining <= 0) arrived.add(f);
     }
+
+    // Group fleets that arrive at the same destination this turn and combine ships
+    final Map<StarComponent, int> combined = {};
+    for (final f in arrived) {
+      combined[f.destination] = (combined[f.destination] ?? 0) + f.ships;
+    }
+    for (final entry in combined.entries) {
+      _processArrival(owner, entry.key, entry.value, rand);
+    }
+
     for (final f in arrived) {
       _removeFleetMarker(f);
       _fleets.remove(f);
     }
   }
 
-  void _processArrival(Fleet fleet, math.Random rand) {
-    final dest = fleet.destination;
+  void _processArrival(String owner, StarComponent dest, int ships, math.Random rand) {
     if (!dest.isMounted) return;
 
-    if (dest.owner == fleet.owner) {
-      dest.ships += fleet.ships;
+    if (dest.owner == owner) {
+      dest.ships += ships;
       onHudChanged?.call();
       return;
     }
 
     // ─── Battle ───────────────────────────────────────────────────────────
     final prevOwner        = dest.owner;
-    int attackers          = fleet.ships;
+    int attackers          = ships;
     final initialAttackers = attackers;
     int defenders          = dest.ships;
     final initialDefenders = defenders;
@@ -478,10 +484,10 @@ class StardomainGame extends FlameGame {
     // Surviving ships stay at the star — not the starting count, the remainder
     if (attackers > 0) {
       dest.ships = attackers; // surviving attackers inherit the star
-      dest.owner = fleet.owner;
-      _applyCaptureRing(dest, fleet.owner);
+      dest.owner = owner;
+      _applyCaptureRing(dest, owner);
       // Track player-relevant outcomes
-      if (fleet.owner == 'player') {
+      if (owner == 'player') {
         battlesWon++;
         starsGained++;
         shipsLost += initialAttackers - attackers;
@@ -495,7 +501,7 @@ class StardomainGame extends FlameGame {
       }
     } else {
       dest.ships = defenders; // surviving defenders hold the star
-      if (fleet.owner == 'player') {
+      if (owner == 'player') {
         // Player attack repelled
         battlesLost++;
         shipsLost += initialAttackers;
@@ -645,11 +651,11 @@ class StardomainGame extends FlameGame {
     _selectedMarker?.isSelected = false;
     _selectedMarker = null;
 
-    if (star.owner == 'player') {
-      _clearConnection();
-      _setFirstStar(star);
-    } else if (_selectedStar != null) {
+    if (_selectedStar != null && star != _selectedStar) {
+      // Origin already chosen — any other star (friendly or enemy) becomes the target
       _setTargetStar(star);
+    } else if (_selectedStar == null && star.owner == 'player') {
+      _setFirstStar(star);
     } else {
       _deselectAll();
     }
@@ -696,13 +702,6 @@ class StardomainGame extends FlameGame {
     onActionChanged?.call();
   }
 
-  void _clearConnection() {
-    _ring2?.removeFromParent();
-    _connectionLine?.removeFromParent();
-    _ring2 = null;
-    _connectionLine = null;
-    _targetStar = null;
-  }
 
   void _deselectAll() {
     _ring1?.removeFromParent();
