@@ -93,16 +93,16 @@ class _MenuOverlayState extends State<MenuOverlay> {
             ),
             const SizedBox(height: 20),
             GestureDetector(
+              onTap: () => _onNewGame(context),
+              child: Image.asset('assets/img/newgame_button.png', width: 240),
+            ),
+            const SizedBox(height: 12),
+            GestureDetector(
               onTap: _hasSave ? _onContinue : null,
               child: Opacity(
                 opacity: _hasSave ? 1.0 : 0.35,
                 child: Image.asset('assets/img/continue_button.png', width: 240),
               ),
-            ),
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: () => _onNewGame(context),
-              child: Image.asset('assets/img/newgame_button.png', width: 240),
             ),
           ],
         ),

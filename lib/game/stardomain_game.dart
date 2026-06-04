@@ -68,6 +68,10 @@ class StardomainGame extends FlameGame {
   WinResult? _gameResult;
   WinResult? get gameResult => _gameResult;
 
+  // Auto-move tracking
+  final Set<StarComponent> _autoMovedStars = {};
+  StarComponent?           _pendingAutoMoveStar;
+
   // Selection
   StarComponent?   _selectedStar;
   StarComponent?   _targetStar;
@@ -123,10 +127,11 @@ class StardomainGame extends FlameGame {
   void sendFleet() {
     if (_selectedStar == null || _targetStar == null || _shipsToSend <= 0) return;
     if (_selectedStar!.ships < _shipsToSend) return;
-    _selectedStar!.ships -= _shipsToSend;
+    final origin = _selectedStar!;
+    origin.ships -= _shipsToSend;
     final fleet = Fleet(
       owner: 'player',
-      origin: _selectedStar!,
+      origin: origin,
       destination: _targetStar!,
       ships: _shipsToSend,
       turnsRemaining: distanceInTurns,
@@ -134,8 +139,55 @@ class StardomainGame extends FlameGame {
     _fleets.add(fleet);
     _addFleetMarker(fleet);
     _sfx.play(AssetSource('sound/select.wav'));
+    if (_pendingAutoMoveStar == origin) {
+      _autoMovedStars.add(origin);
+      _pendingAutoMoveStar = null;
+    }
     _deselectAll();
     onHudChanged?.call();
+  }
+
+  void autoMove() {
+    if (_state != GameState.playing) return;
+
+    final candidates = _stars
+        .where((s) => s.owner == 'player' && s.isMounted &&
+            !_autoMovedStars.contains(s) && s.ships > 0)
+        .toList()
+      ..sort((a, b) => b.ships.compareTo(a.ships));
+
+    if (candidates.isEmpty) return;
+    final origin = candidates.first;
+
+    final targets = _stars
+        .where((s) => s.owner != 'player' && s.isMounted)
+        .toList()
+      ..sort((a, b) => (a.position - origin.position).length2
+          .compareTo((b.position - origin.position).length2));
+
+    if (targets.isEmpty) return;
+    final target = targets.first;
+
+    _deselectAll();
+    _setFirstStar(origin);
+    _setTargetStar(target);
+    _zoomToShowStars(origin, target);
+    _pendingAutoMoveStar = origin;
+  }
+
+  void _zoomToShowStars(StarComponent a, StarComponent b) {
+    const padding = 160.0;
+    final midX  = (a.position.x + b.position.x) / 2;
+    final midY  = (a.position.y + b.position.y) / 2;
+    final spanW = (a.position.x - b.position.x).abs() + padding * 2;
+    final spanH = (a.position.y - b.position.y).abs() + padding * 2;
+    final newZoom = math.min(size.x / spanW, size.y / spanH).clamp(0.3, 3.0);
+    camera.viewfinder.zoom = newZoom;
+    camera.viewfinder.position = Vector2(
+      midX - size.x / (2 * newZoom),
+      midY - size.y / (2 * newZoom),
+    );
+    _clampCamera();
   }
 
   // ─── Turn processing ──────────────────────────────────────────────────────
@@ -145,10 +197,12 @@ class StardomainGame extends FlameGame {
     _state = GameState.transitioning;
     _deselectAll();
 
-    // Clear previous turn's markers and reset per-turn stats before resolving the new turn
+    // Clear previous turn's markers, stats, and auto-move state
     for (final m in _battleMarkers) { m.removeFromParent(); }
     _battleMarkers.clear();
     battlesWon = battlesLost = starsGained = starsLost = shipsLost = 0;
+    _autoMovedStars.clear();
+    _pendingAutoMoveStar = null;
 
     final rand = math.Random();
 
@@ -467,12 +521,18 @@ class StardomainGame extends FlameGame {
   // ─── Enemy AI ─────────────────────────────────────────────────────────────
 
   void _runEnemyAI(math.Random rand) {
+    // Auto-move style: process stars in descending ship-count order
     final enemyStars = _stars
-        .where((s) => _isEnemy(s.owner) && s.ships > 5 && s.isMounted)
+        .where((s) => _isEnemy(s.owner) && s.ships > 2 && s.isMounted)
+        .toList()
+      ..sort((a, b) => b.ships.compareTo(a.ships));
+
+    final playerStarList = _stars
+        .where((s) => s.owner == 'player' && s.isMounted)
         .toList();
 
     for (final star in enemyStars) {
-      // Sort non-enemy stars by distance
+      // Find closest non-enemy star (auto-move: single target)
       final targets = _stars
           .where((s) => s.owner != star.owner && s.isMounted)
           .toList()
@@ -480,30 +540,35 @@ class StardomainGame extends FlameGame {
             .compareTo((b.position - star.position).length2));
 
       if (targets.isEmpty) continue;
+      final target = targets.first;
 
-      // Send to 1 or 2 nearest targets (random)
-      final numTargets = math.min(rand.nextInt(2) + 1, targets.length);
-      int available = star.ships;
-
-      for (int i = 0; i < numTargets && available > 3; i++) {
-        final shipsToSend = math.max(1, (available * 0.5).round());
-        if (shipsToSend <= 0) continue;
-        star.ships -= shipsToSend;
-        available  -= shipsToSend;
-
-        final target = targets[i];
-        final d = (star.position - target.position).length;
-        final turns = math.max(1, (d / travelSpeed).ceil());
-        final fleet = Fleet(
-          owner: star.owner!,
-          origin: star,
-          destination: target,
-          ships: shipsToSend,
-          turnsRemaining: turns,
-        );
-        _fleets.add(fleet);
-        _addFleetMarker(fleet);
+      // Strategic conservatism: frontline stars near the player keep more ships
+      double nearestPlayer = double.infinity;
+      for (final ps in playerStarList) {
+        final d = (star.position - ps.position).length;
+        if (d < nearestPlayer) nearestPlayer = d;
       }
+
+      final maxFraction = nearestPlayer < 400 ? 0.25
+          : nearestPlayer < 800              ? 0.55
+          :                                    0.85;
+
+      final maxSend = math.max(1, (star.ships * maxFraction).round());
+      final shipsToSend = rand.nextInt(maxSend) + 1; // 1..maxSend
+      if (shipsToSend >= star.ships) continue;       // always keep ≥1 ship
+
+      star.ships -= shipsToSend;
+
+      final d = (star.position - target.position).length;
+      final turns = math.max(1, (d / travelSpeed).ceil());
+      _fleets.add(Fleet(
+        owner: star.owner!,
+        origin: star,
+        destination: target,
+        ships: shipsToSend,
+        turnsRemaining: turns,
+      ));
+      _addFleetMarker(_fleets.last);
     }
   }
 
@@ -526,9 +591,14 @@ class StardomainGame extends FlameGame {
     final color = owner == 'player'
         ? const Color(0xFF42A5F5) // blue
         : const Color(0xFFEF5350); // red
+    final ringMult = switch (star.config.size) {
+      StarSize.light  => 3.2,
+      StarSize.medium => 2.4,
+      StarSize.large  => 1.8,
+    };
     final ring = CaptureRing(
       color: color,
-      ringRadius: star.radius * 1.8,
+      ringRadius: star.radius * ringMult,
       starPosition: star.position.clone(),
     );
     _captureRings[star] = ring;
@@ -642,6 +712,7 @@ class StardomainGame extends FlameGame {
     _selectedStar = null; _targetStar = null; _shipsToSend = 0;
     _selectedMarker?.isSelected = false;
     _selectedMarker = null;
+    _pendingAutoMoveStar = null;
     overlays.remove(overlayStarInfo);
     overlays.remove(overlayAction);
     onStarSelected?.call(null);
@@ -914,6 +985,8 @@ class StardomainGame extends FlameGame {
     _fleetMarkers.clear();
     _captureRings.clear();
     _battleMarkers.clear();
+    _autoMovedStars.clear();
+    _pendingAutoMoveStar = null;
     _ring1 = null; _ring2 = null; _connectionLine = null;
     _selectedStar = null; _targetStar = null; _shipsToSend = 0;
     _selectedMarker = null;

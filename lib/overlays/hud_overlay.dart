@@ -32,12 +32,33 @@ class _HudOverlayState extends State<HudOverlay> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: fleet and star totals
+          // Left: fleet and star totals + auto-move
           Row(
             children: [
               _HudChip('Ships: ${game.totalPlayerShips}'),
               const SizedBox(width: 12),
               _HudChip('Stars: ${game.totalPlayerStars}'),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: game.autoMove,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1565C0),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF64B5F6)),
+                  ),
+                  child: const Text(
+                    'AUTO-MOVE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
           // Right: turn counter + end turn button
