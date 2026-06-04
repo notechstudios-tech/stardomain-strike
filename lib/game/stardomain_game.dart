@@ -7,8 +7,10 @@ import 'package:audioplayers/audioplayers.dart';
 import '../components/battle_marker.dart';
 import '../components/capture_ring.dart';
 import '../components/connection_line.dart';
+import '../components/event_ring.dart';
 import '../components/fleet_marker.dart';
 import '../components/star_component.dart';
+import '../models/game_event.dart';
 import '../models/fleet.dart';
 import '../models/star_config.dart';
 import '../models/game_save.dart';
@@ -33,6 +35,7 @@ class StardomainGame extends FlameGame {
   static const String overlayAction       = 'action';
   static const String overlayBattleReport = 'battleReport';
   static const String overlayGameResult   = 'gameResult';
+  static const String overlayEvent        = 'event';
 
   static const double universeWidth   = 3200;
   static const double universeHeight  = 1600;
@@ -62,11 +65,18 @@ class StardomainGame extends FlameGame {
   final Map<Fleet, FleetMarker>          _fleetMarkers  = {};
   final Map<StarComponent, CaptureRing>  _captureRings  = {};
   final List<PositionComponent>          _battleMarkers = [];
+  final Map<StarComponent, WormholeRing> _wormholeRings = {};
 
   Completer<void>? _battleReportCompleter;
 
   WinResult? _gameResult;
   WinResult? get gameResult => _gameResult;
+
+  // Event queue for special star encounters and disasters
+  final List<GameEvent> _eventQueue = [];
+  GameEvent? _currentEvent;
+  GameEvent? get currentEvent => _currentEvent;
+  PositionComponent? _eventRingComponent;
 
   // Auto-move tracking
   final Set<StarComponent> _autoMovedStars = {};
@@ -175,6 +185,34 @@ class StardomainGame extends FlameGame {
     _pendingAutoMoveStar = origin;
   }
 
+  void warp() {
+    if (_state != GameState.playing) return;
+    final star = _selectedStar;
+    if (star == null || star.specialType != SpecialStarType.wormhole) return;
+    if (star.wormholeTarget == null || !star.wormholeTarget!.isMounted) return;
+    if (_shipsToSend <= 0 || star.ships < _shipsToSend) return;
+
+    final origin = star;
+    origin.ships -= _shipsToSend;
+    final fleet = Fleet(
+      owner: 'player',
+      origin: origin,
+      destination: origin.wormholeTarget!,
+      ships: _shipsToSend,
+      turnsRemaining: 1,
+      totalTurns: 1,
+    );
+    _fleets.add(fleet);
+    _addFleetMarker(fleet);
+    _sfx.play(AssetSource('sound/select.wav'));
+    if (_pendingAutoMoveStar == origin) {
+      _autoMovedStars.add(origin);
+      _pendingAutoMoveStar = null;
+    }
+    _deselectAll();
+    onHudChanged?.call();
+  }
+
   void _zoomToShowStars(StarComponent a, StarComponent b) {
     const padding = 160.0;
     final midX  = (a.position.x + b.position.x) / 2;
@@ -203,8 +241,12 @@ class StardomainGame extends FlameGame {
     battlesWon = battlesLost = starsGained = starsLost = shipsLost = 0;
     _autoMovedStars.clear();
     _pendingAutoMoveStar = null;
+    _eventQueue.clear();
 
     final rand = math.Random();
+
+    // 0. Natural disasters (before battles)
+    _applyNaturalDisasters(rand);
 
     // 1. Player fleets advance and battle (before any production)
     _advanceFleets('player', rand);
@@ -232,7 +274,11 @@ class StardomainGame extends FlameGame {
 
     _currentTurn++;
 
-    // 6. Show battle report — user can pan/zoom to inspect markers on the map
+    // 6. Show queued events (special stars, disasters) — camera pans to each
+    await _processEventQueue();
+    if (_state == GameState.menu) return;
+
+    // 7. Show battle report — user can pan/zoom to inspect markers on the map
     _battleReportCompleter = Completer<void>();
     overlays.add(overlayBattleReport);
     await _battleReportCompleter!.future;
@@ -296,6 +342,104 @@ class StardomainGame extends FlameGame {
     return null;
   }
 
+  // ─── Special stars & disasters ───────────────────────────────────────────
+
+  void _applyNaturalDisasters(math.Random rand) {
+    for (final star in _stars.toList()) {
+      if (!star.isMounted) continue;
+      if (rand.nextDouble() >= 0.002) continue; // 1 in 500
+      final ownerDesc = star.owner == 'player' ? 'one of your stars'
+          : _isEnemy(star.owner) ? 'an enemy star'
+          : 'a neutral star';
+      if (rand.nextBool()) {
+        // Supernova: star destroyed
+        _eventQueue.add(GameEvent(
+          title: 'Supernova!',
+          detail: 'A catastrophic supernova has destroyed $ownerDesc!\nAll ${star.ships} ships were lost.',
+          star: star,
+          accentColor: const Color(0xFFFF9800),
+        ));
+        if (star.owner == 'player') { shipsLost += star.ships; }
+        _captureRings.remove(star)?.removeFromParent();
+        _wormholeRings.remove(star)?.removeFromParent();
+        _stars.remove(star);
+        star.removeFromParent();
+      } else {
+        // Population collapse: ships, resources, defence → 0
+        _eventQueue.add(GameEvent(
+          title: 'Population Collapse!',
+          detail: 'Internal catastrophe has ravaged $ownerDesc.\nShips, production, and defence have been lost.',
+          star: star,
+          accentColor: const Color(0xFFFF9800),
+        ));
+        if (star.owner == 'player') { shipsLost += star.ships; }
+        star.ships = 0;
+        star.resources = 0;
+        star.defence = 0;
+      }
+    }
+  }
+
+  Future<void> _processEventQueue() async {
+    for (final event in _eventQueue) {
+      if (_state == GameState.menu) break;
+      if (event.star != null && event.star!.isMounted) {
+        _focusCameraOnStar(event.star!);
+        _showEventRing(event.star!);
+      }
+      _currentEvent = event;
+      overlays.add(overlayEvent);
+      await Future.delayed(const Duration(seconds: 5));
+      overlays.remove(overlayEvent);
+      _currentEvent = null;
+      _hideEventRing();
+    }
+    _eventQueue.clear();
+  }
+
+  void _focusCameraOnStar(StarComponent star) {
+    const zoom = 1.5;
+    camera.viewfinder.zoom = zoom;
+    camera.viewfinder.position = Vector2(
+      star.position.x - size.x / (2 * zoom),
+      star.position.y - size.y / (2 * zoom),
+    );
+    _clampCamera();
+  }
+
+  void _showEventRing(StarComponent star) {
+    _eventRingComponent?.removeFromParent();
+    final r = math.max(30.0, star.radius) * 2.5;
+    _eventRingComponent = EventRing(starPosition: star.position.clone(), radius: r);
+    world.add(_eventRingComponent!);
+  }
+
+  void _hideEventRing() {
+    _eventRingComponent?.removeFromParent();
+    _eventRingComponent = null;
+  }
+
+  void _pairWormholes() {
+    final wormholes = _stars.where((s) => s.specialType == SpecialStarType.wormhole).toList();
+    for (int i = 0; i + 1 < wormholes.length; i += 2) {
+      wormholes[i].wormholeTarget     = wormholes[i + 1];
+      wormholes[i + 1].wormholeTarget = wormholes[i];
+      _addWormholeRing(wormholes[i]);
+      _addWormholeRing(wormholes[i + 1]);
+    }
+    // Odd one out: downgrade to friendly encounter
+    if (wormholes.length.isOdd) {
+      wormholes.last.specialType = SpecialStarType.friendlyEncounter;
+    }
+  }
+
+  void _addWormholeRing(StarComponent star) {
+    final r = math.max(20.0, star.radius) * 2.2;
+    final ring = WormholeRing(starPosition: star.position.clone(), radius: r);
+    _wormholeRings[star] = ring;
+    world.add(ring);
+  }
+
   void _handleGameEnd(WinResult result) {
     _gameResult = result;
     overlays.remove(overlayHud);
@@ -323,6 +467,10 @@ class StardomainGame extends FlameGame {
         ships: star.ships,
         resources: star.resources,
         defence: star.defence,
+        specialType: star.specialType.name,
+        wormholeTargetIndex: star.wormholeTarget != null
+            ? _stars.indexOf(star.wormholeTarget!)
+            : -1,
       ));
     }
 
@@ -408,10 +556,29 @@ class StardomainGame extends FlameGame {
         sprite: sprite,
       )..position = Vector2(ss.x, ss.y)..scale = Vector2.all(scale);
 
+      star.specialType = switch (ss.specialType) {
+        'friendlyEncounter' => SpecialStarType.friendlyEncounter,
+        'ancientTrap'       => SpecialStarType.ancientTrap,
+        'wormhole'          => SpecialStarType.wormhole,
+        _                   => SpecialStarType.none,
+      };
+
       _stars.add(star);
       world.add(star);
 
       if (ss.owner != null) _applyCaptureRing(star, ss.owner!);
+    }
+
+    // Wire up wormhole connections and add rings
+    for (int i = 0; i < save.stars.length && i < _stars.length; i++) {
+      final wti = save.stars[i].wormholeTargetIndex;
+      if (wti >= 0 && wti < _stars.length) {
+        _stars[i].wormholeTarget = _stars[wti];
+      }
+      if (_stars[i].specialType == SpecialStarType.wormhole &&
+          _stars[i].wormholeTarget != null) {
+        _addWormholeRing(_stars[i]);
+      }
     }
 
     // Restore in-transit fleets
@@ -455,6 +622,43 @@ class StardomainGame extends FlameGame {
   void _processArrival(String owner, StarComponent dest, int ships, math.Random rand) {
     if (!dest.isMounted) return;
 
+    // ─── Ancient Trap ─────────────────────────────────────────────────────
+    if (dest.specialType == SpecialStarType.ancientTrap) {
+      dest.specialType = SpecialStarType.none; // trap sprung — gone forever
+      final isPlayer = owner == 'player';
+      _eventQueue.add(GameEvent(
+        title: 'Ancient Trap!',
+        detail: isPlayer
+            ? 'Your fleet of $ships ships was obliterated\nby an ancient automated defence system!'
+            : 'An enemy fleet of $ships ships was destroyed\nby an ancient automated defence system!',
+        star: dest,
+        accentColor: const Color(0xFFFF6B6B),
+      ));
+      if (isPlayer) { battlesLost++; shipsLost += ships; }
+      onHudChanged?.call();
+      return;
+    }
+
+    // ─── Friendly Encounter (player only) ────────────────────────────────
+    if (owner == 'player' && dest.specialType == SpecialStarType.friendlyEncounter) {
+      final bonus = rand.nextInt(20) + 1;
+      dest.specialType = SpecialStarType.none;
+      dest.owner = 'player';
+      dest.ships += ships + bonus;
+      _applyCaptureRing(dest, 'player');
+      _eventQueue.add(GameEvent(
+        title: 'Special Star Found!',
+        detail: 'A friendly civilisation offers to join your empire!\n+$bonus bonus ships added.',
+        star: dest,
+        accentColor: const Color(0xFFFF80AB),
+      ));
+      battlesWon++;
+      starsGained++;
+      onHudChanged?.call();
+      return;
+    }
+
+    // ─── Friendly reinforcement ───────────────────────────────────────────
     if (dest.owner == owner) {
       dest.ships += ships;
       onHudChanged?.call();
@@ -868,6 +1072,7 @@ class StardomainGame extends FlameGame {
 
     _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
     _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
+    _pairWormholes();
   }
 
   void _buildCosmetics(math.Random rand) {
@@ -911,6 +1116,17 @@ class StardomainGame extends FlameGame {
             ships: _randomShips(rand), resources: _randomResources(rand), defence: _randomDefence(rand)),
         sprite: sp,
       )..position = Vector2(x, y)..scale = Vector2.all(scale);
+      // 10% chance of being a special star
+      if (rand.nextDouble() < 0.10) {
+        final t = rand.nextDouble();
+        if (t < 0.33) {
+          star.specialType = SpecialStarType.friendlyEncounter;
+        } else if (t < 0.66) {
+          star.specialType = SpecialStarType.ancientTrap;
+        } else {
+          star.specialType = SpecialStarType.wormhole; // paired later
+        }
+      }
       _stars.add(star);
       world.add(star);
     }
@@ -984,6 +1200,10 @@ class StardomainGame extends FlameGame {
     _fleetMarkers.clear();
     _captureRings.clear();
     _battleMarkers.clear();
+    _wormholeRings.clear();
+    _eventQueue.clear();
+    _currentEvent = null;
+    _eventRingComponent = null;
     _autoMovedStars.clear();
     _pendingAutoMoveStar = null;
     _ring1 = null; _ring2 = null; _connectionLine = null;

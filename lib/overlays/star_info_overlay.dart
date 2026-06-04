@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../game/stardomain_game.dart';
+import '../models/star_config.dart';
 
 class StarInfoOverlay extends StatefulWidget {
   final StardomainGame game;
@@ -13,14 +14,14 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
   @override
   void initState() {
     super.initState();
-    widget.game.onStarSelected = (_) {
-      if (mounted) setState(() {});
-    };
+    widget.game.onStarSelected = (_) { if (mounted) setState(() {}); };
+    widget.game.onActionChanged = () { if (mounted) setState(() {}); };
   }
 
   @override
   void dispose() {
     widget.game.onStarSelected = null;
+    widget.game.onActionChanged = null;
     super.dispose();
   }
 
@@ -42,22 +43,32 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
           border: Border.all(color: Colors.blue.shade300, width: 1.5),
           borderRadius: BorderRadius.circular(10),
         ),
-        child: Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _StatItem(label: 'Ships', value: '${star.ships}'),
-            _divider(),
-            if (inTransit > 0) ...[
-              _StatItem(
-                label: 'In Transit',
-                value: '$inTransit',
-                valueColor: Colors.orange.shade300,
-              ),
-              _divider(),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _StatItem(label: 'Ships', value: '${star.ships}'),
+                _divider(),
+                if (inTransit > 0) ...[
+                  _StatItem(
+                    label: 'In Transit',
+                    value: '$inTransit',
+                    valueColor: Colors.orange.shade300,
+                  ),
+                  _divider(),
+                ],
+                _StatItem(label: 'Resources', value: '${star.resources}/turn'),
+                _divider(),
+                _StatItem(label: 'Defence', value: '${star.defence}'),
+              ],
+            ),
+            if (star.specialType == SpecialStarType.wormhole &&
+                star.wormholeTarget != null) ...[
+              const SizedBox(height: 10),
+              _WarpControls(game: game),
             ],
-            _StatItem(label: 'Resources', value: '${star.resources}/turn'),
-            _divider(),
-            _StatItem(label: 'Defence', value: '${star.defence}'),
           ],
         ),
       ),
@@ -100,5 +111,97 @@ class _StatItem extends StatelessWidget {
             ),
           ),
         ],
+      );
+}
+
+class _WarpControls extends StatelessWidget {
+  final StardomainGame game;
+  const _WarpControls({required this.game});
+
+  @override
+  Widget build(BuildContext context) {
+    final ships    = game.shipsToSend;
+    final maxShips = game.selectedStar?.ships ?? 0;
+    final canWarp  = maxShips > 0;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: game.decreaseShips,
+          child: _arrowBtn('<', ships <= 1),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$ships',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+              Text(
+                'ships',
+                style: TextStyle(
+                  color: Colors.cyan.shade200,
+                  fontSize: 10,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: game.increaseShips,
+          child: _arrowBtn('>', ships >= maxShips),
+        ),
+        const SizedBox(width: 12),
+        GestureDetector(
+          onTap: canWarp ? game.warp : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: canWarp ? const Color(0xFF006064) : Colors.grey.shade800,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: canWarp ? const Color(0xFF00E5FF) : Colors.grey.shade600,
+              ),
+            ),
+            child: const Text(
+              'WARP',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _arrowBtn(String label, bool disabled) => Container(
+        width: 28, height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: disabled ? Colors.grey.shade900 : Colors.white12,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: disabled ? Colors.grey : Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            decoration: TextDecoration.none,
+          ),
+        ),
       );
 }

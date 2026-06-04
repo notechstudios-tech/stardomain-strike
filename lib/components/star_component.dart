@@ -9,6 +9,8 @@ class StarComponent extends SpriteComponent {
   int ships;
   int resources;
   int defence;
+  SpecialStarType specialType = SpecialStarType.none;
+  StarComponent? wormholeTarget;
 
   StarComponent({required this.config, required Sprite sprite})
       : owner = config.owner,
@@ -24,7 +26,7 @@ class StarComponent extends SpriteComponent {
 
     if (config.size == StarSize.light) {
       // Small stars: rapid opacity twinkle — scale change is invisible at this size
-      final period = 0.3 + phase * 0.7; // 0.3–1.0 s, each star different
+      final period = 0.5 + phase * 0.5; // 0.5–1.0 s, each star different
       add(OpacityEffect.by(
         -0.82,
         EffectController(

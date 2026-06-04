@@ -6,6 +6,8 @@ class StarSave {
   final String? iconKey; // non-null for home stars ('enemy_blue', 'enemy_red')
   final String? owner;
   final int ships, resources, defence;
+  final String specialType;        // SpecialStarType.name
+  final int wormholeTargetIndex;   // -1 if not wormhole
 
   const StarSave({
     required this.x,
@@ -16,11 +18,14 @@ class StarSave {
     required this.ships,
     required this.resources,
     required this.defence,
+    this.specialType = 'none',
+    this.wormholeTargetIndex = -1,
   });
 
   Map<String, dynamic> toJson() => {
     'x': x, 'y': y, 'size': size, 'iconKey': iconKey, 'owner': owner,
     'ships': ships, 'resources': resources, 'defence': defence,
+    'specialType': specialType, 'wormholeTargetIndex': wormholeTargetIndex,
   };
 
   factory StarSave.fromJson(Map<String, dynamic> j) => StarSave(
@@ -32,6 +37,8 @@ class StarSave {
     ships: j['ships'] as int,
     resources: j['resources'] as int,
     defence: j['defence'] as int,
+    specialType: j['specialType'] as String? ?? 'none',
+    wormholeTargetIndex: j['wormholeTargetIndex'] as int? ?? -1,
   );
 }
 
