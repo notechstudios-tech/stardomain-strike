@@ -85,12 +85,14 @@ class GameSave {
   final int seed;
   final List<StarSave> stars;
   final List<FleetSave> fleets;
+  final List<String> technologies;
 
   const GameSave({
     required this.turn,
     required this.seed,
     required this.stars,
     required this.fleets,
+    this.technologies = const [],
   });
 
   String toJsonString() => jsonEncode({
@@ -98,6 +100,7 @@ class GameSave {
     'seed': seed,
     'stars': stars.map((s) => s.toJson()).toList(),
     'fleets': fleets.map((f) => f.toJson()).toList(),
+    'technologies': technologies,
   });
 
   factory GameSave.fromJsonString(String s) {
@@ -111,6 +114,7 @@ class GameSave {
       fleets: (j['fleets'] as List)
           .map((e) => FleetSave.fromJson(e as Map<String, dynamic>))
           .toList(),
+      technologies: (j['technologies'] as List?)?.cast<String>() ?? [],
     );
   }
 }

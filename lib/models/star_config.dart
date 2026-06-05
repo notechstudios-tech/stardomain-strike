@@ -1,6 +1,6 @@
 enum StarSize { light, medium, large }
 
-enum SpecialStarType { none, friendlyEncounter, ancientTrap, wormhole }
+enum SpecialStarType { none, friendlyEncounter, ancientTrap, wormhole, ancientRuins }
 
 class StarConfig {
   final StarSize size;

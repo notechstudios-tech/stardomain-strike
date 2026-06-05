@@ -27,8 +27,9 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final game = widget.game;
-    final star = game.selectedStar;
+    final game    = widget.game;
+    final star    = game.selectedStar ?? game.peekedStar;
+    final peeking = game.isPeekingAtStar;
     if (star == null) return const SizedBox.shrink();
 
     final inTransit = game.shipsInTransitFrom(star);
@@ -64,7 +65,8 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
                 _StatItem(label: 'Defence', value: '${star.defence}'),
               ],
             ),
-            if (star.specialType == SpecialStarType.wormhole &&
+            if (!peeking &&
+                star.specialType == SpecialStarType.wormhole &&
                 star.wormholeTarget != null &&
                 star.wormholeDiscovered) ...[
               const SizedBox(height: 10),

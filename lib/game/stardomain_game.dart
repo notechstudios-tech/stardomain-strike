@@ -11,6 +11,7 @@ import '../components/event_ring.dart';
 import '../components/fleet_marker.dart';
 import '../components/star_component.dart';
 import '../models/game_event.dart';
+import '../models/technology.dart';
 import '../models/fleet.dart';
 import '../models/star_config.dart';
 import '../models/game_save.dart';
@@ -73,10 +74,19 @@ class StardomainGame extends FlameGame {
   WinResult? get gameResult => _gameResult;
 
   // Event queue for special star encounters and disasters
-  final List<GameEvent> _eventQueue = [];
-  GameEvent? _currentEvent;
-  GameEvent? get currentEvent => _currentEvent;
-  PositionComponent? _eventRingComponent;
+  final List<GameEvent>   _eventQueue = [];
+  GameEvent?              _currentEvent;
+  GameEvent?              get currentEvent => _currentEvent;
+  PositionComponent?      _eventRingComponent;
+
+  // Discovered technologies
+  final Set<Technology> _playerTechs = {};
+  bool hasTech(Technology t) => _playerTechs.contains(t);
+
+  // Quantum-vision peek star (non-player star tapped with quantum vision)
+  StarComponent? _peekedStar;
+  StarComponent? get peekedStar      => _peekedStar;
+  bool           get isPeekingAtStar => _selectedStar == null && _peekedStar != null;
 
   // Auto-move tracking
   final Set<StarComponent> _autoMovedStars = {};
@@ -119,7 +129,8 @@ class StardomainGame extends FlameGame {
   int get distanceInTurns {
     if (_selectedStar == null || _targetStar == null) return 0;
     final d = (_selectedStar!.position - _targetStar!.position).length;
-    return math.max(1, (d / travelSpeed).ceil());
+    final speed = hasTech(Technology.improvedEngines) ? travelSpeed * 2 : travelSpeed;
+    return math.max(1, (d / speed).ceil());
   }
 
   void increaseShips() {
@@ -261,7 +272,7 @@ class StardomainGame extends FlameGame {
     // 4. Production runs AFTER all battles so the player clearly sees
     //    the battle outcome before new ships are added.
     for (final s in _stars.where((s) => s.owner == 'player' && s.isMounted)) {
-      s.ships += s.resources;
+      s.ships += s.resources + (hasTech(Technology.improvedProduction) ? 1 : 0);
     }
     for (final s in _stars.where((s) => _isEnemy(s.owner) && s.isMounted)) {
       s.ships += s.resources;
@@ -432,6 +443,27 @@ class StardomainGame extends FlameGame {
     }
   }
 
+  void _discoverAncientTech(StarComponent star, math.Random rand) {
+    final available = Technology.values.where((t) => !_playerTechs.contains(t)).toList();
+    if (available.isEmpty) {
+      _eventQueue.add(GameEvent(
+        title: 'Ancient Ruins Found!',
+        detail: 'Your scientists examine the ruins but find nothing new.\nAll technologies have already been mastered.',
+        star: star,
+        accentColor: const Color(0xFFFFD700),
+      ));
+      return;
+    }
+    final tech = available[rand.nextInt(available.length)];
+    _playerTechs.add(tech);
+    _eventQueue.add(GameEvent(
+      title: 'Ancient Technology Discovered!',
+      detail: '${tech.displayName}\n${tech.description}',
+      star: star,
+      accentColor: const Color(0xFFFFD700),
+    ));
+  }
+
   void _discoverWormhole(StarComponent star) {
     if (star.wormholeDiscovered) return;
     star.wormholeDiscovered = true;
@@ -506,6 +538,7 @@ class StardomainGame extends FlameGame {
       seed: _universeRngSeed,
       stars: starSaves,
       fleets: fleetSaves,
+      technologies: _playerTechs.map((t) => t.name).toList(),
     ));
   }
 
@@ -593,6 +626,11 @@ class StardomainGame extends FlameGame {
         _addWormholeRing(_stars[i]);
       }
     }
+
+    // Restore technologies
+    _playerTechs.addAll(
+      save.technologies.expand((n) => Technology.values.where((t) => t.name == n)),
+    );
 
     // Restore in-transit fleets
     for (final fs in save.fleets) {
@@ -688,44 +726,75 @@ class StardomainGame extends FlameGame {
     int defenders          = dest.ships;
     final initialDefenders = defenders;
     final defence          = dest.defence;
+    final isPlayerAtk      = owner == 'player';
+    final isPlayerDef      = prevOwner == 'player';
+
+    // Alter Reality: 10% chance defenders switch sides
+    if (isPlayerAtk && hasTech(Technology.alterReality) && rand.nextDouble() < 0.1) {
+      attackers += defenders;
+      defenders  = 0;
+    }
+
+    // Surprise Attack: player gets a free kill before battle
+    if (isPlayerAtk && hasTech(Technology.surpriseAttack) && defenders > 0) {
+      defenders--;
+    }
+    // Surprise Defence: player defending gets a free kill on attackers
+    if (isPlayerDef && hasTech(Technology.surpriseDefence) && attackers > 0) {
+      attackers--;
+    }
 
     while (attackers > 0 && defenders > 0) {
-      // Attacker hits: needs (6 + defence)+ on 1-10
-      final atkRoll = rand.nextInt(10) + 1;
-      final atkThreshold = math.min(10, 6 + defence);
-      if (atkRoll >= atkThreshold) defenders--;
+      // Attacker roll with tech modifiers
+      var atkRoll = isPlayerAtk && hasTech(Technology.improvedWeaponCapacity)
+          ? rand.nextInt(11) + 1
+          : rand.nextInt(10) + 1;
+      if (isPlayerAtk && hasTech(Technology.quantumAttack) && rand.nextDouble() < 0.1) {
+        atkRoll = math.min(atkRoll * 2, 20);
+      }
+      if (isPlayerAtk && hasTech(Technology.advancedWeapons)) atkRoll++;
 
+      // Attack threshold with tech modifiers
+      int effectiveDefence = defence;
+      if (isPlayerDef && hasTech(Technology.advancedStarDefence))  effectiveDefence++;
+      if (isPlayerDef && hasTech(Technology.advancedShipDefence))  effectiveDefence++;
+      final baseThreshold  = isPlayerAtk && hasTech(Technology.improvedWeaponStrength) ? 5 : 6;
+      final atkThreshold   = math.min(10, baseThreshold + effectiveDefence);
+
+      if (atkRoll >= atkThreshold) defenders--;
       if (defenders <= 0) break;
 
-      // Defender hits: needs 6+ on 1-10
-      if (rand.nextInt(10) + 1 >= 6) attackers--;
+      // Defender roll — player attackers harder to kill with advancedShipDefence
+      final defThreshold = isPlayerAtk && hasTech(Technology.advancedShipDefence) ? 7 : 6;
+      if (rand.nextInt(10) + 1 >= defThreshold) attackers--;
     }
 
     // Surviving ships stay at the star — not the starting count, the remainder
     if (attackers > 0) {
-      dest.ships = attackers; // surviving attackers inherit the star
+      dest.ships = attackers;
       dest.owner = owner;
       _applyCaptureRing(dest, owner);
-      if (owner == 'player' && dest.specialType == SpecialStarType.wormhole) {
+      if (isPlayerAtk && dest.specialType == SpecialStarType.wormhole) {
         _discoverWormhole(dest);
       }
-      // Track player-relevant outcomes
-      if (owner == 'player') {
+      if (isPlayerAtk && dest.specialType == SpecialStarType.ancientRuins) {
+        dest.specialType = SpecialStarType.none;
+        _discoverAncientTech(dest, rand);
+      }
+      if (isPlayerAtk) {
         battlesWon++;
         starsGained++;
         shipsLost += initialAttackers - attackers;
         _addBattleMarker(dest, won: true);
-      } else if (prevOwner == 'player') {
-        // Enemy captured a player star
+      } else if (isPlayerDef) {
         battlesLost++;
         starsLost++;
         shipsLost += initialDefenders;
         _addBattleMarker(dest, won: false);
       }
     } else {
-      dest.ships = defenders; // surviving defenders hold the star
-      if (owner == 'player') {
-        // Player attack repelled
+      dest.ships = defenders;
+      if (isPlayerAtk) {
         battlesLost++;
         shipsLost += initialAttackers;
         _addBattleMarker(dest, won: false);
@@ -875,10 +944,16 @@ class StardomainGame extends FlameGame {
     _selectedMarker = null;
 
     if (_selectedStar != null && star != _selectedStar) {
-      // Origin already chosen — any other star (friendly or enemy) becomes the target
+      _peekedStar = null;
       _setTargetStar(star);
     } else if (_selectedStar == null && star.owner == 'player') {
+      _peekedStar = null;
       _setFirstStar(star);
+    } else if (_selectedStar == null && hasTech(Technology.quantumVision)) {
+      // Quantum Vision: reveal non-player star stats
+      _peekedStar = star;
+      overlays.add(overlayStarInfo);
+      onStarSelected?.call(star);
     } else {
       _deselectAll();
     }
@@ -935,6 +1010,7 @@ class StardomainGame extends FlameGame {
     _selectedMarker?.isSelected = false;
     _selectedMarker = null;
     _pendingAutoMoveStar = null;
+    _peekedStar = null;
     overlays.remove(overlayStarInfo);
     overlays.remove(overlayAction);
     onStarSelected?.call(null);
@@ -1135,15 +1211,17 @@ class StardomainGame extends FlameGame {
             ships: _randomShips(rand), resources: _randomResources(rand), defence: _randomDefence(rand)),
         sprite: sp,
       )..position = Vector2(x, y)..scale = Vector2.all(scale);
-      // 10% chance of being a special star
+      // 10% chance of being a special star (4 types, equal probability)
       if (rand.nextDouble() < 0.10) {
         final t = rand.nextDouble();
-        if (t < 0.33) {
+        if (t < 0.25) {
           star.specialType = SpecialStarType.friendlyEncounter;
-        } else if (t < 0.66) {
+        } else if (t < 0.50) {
           star.specialType = SpecialStarType.ancientTrap;
-        } else {
+        } else if (t < 0.75) {
           star.specialType = SpecialStarType.wormhole; // paired later
+        } else {
+          star.specialType = SpecialStarType.ancientRuins;
         }
       }
       _stars.add(star);
@@ -1223,6 +1301,8 @@ class StardomainGame extends FlameGame {
     _eventQueue.clear();
     _currentEvent = null;
     _eventRingComponent = null;
+    _playerTechs.clear();
+    _peekedStar = null;
     _autoMovedStars.clear();
     _pendingAutoMoveStar = null;
     _ring1 = null; _ring2 = null; _connectionLine = null;
