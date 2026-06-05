@@ -936,36 +936,56 @@ class StardomainGame extends FlameGame {
   }
 
   // Returns the minimum ships the enemy must keep at its home base.
+  // Uses only observable information: player star positions and fleet marker presence.
   int _enemyHomeBaseMinGarrison(List<StarComponent> playerStarList) {
     if (_enemyHomeBase == null) return 5;
 
-    // Distance from nearest player star to enemy home base
-    double nearestDist = double.infinity;
+    // Count visible player stars by proximity — the enemy sees colored dots, not ship counts
+    int threatScore = 0;
     for (final ps in playerStarList) {
       final d = (ps.position - _enemyHomeBase!.position).length;
-      if (d < nearestDist) nearestDist = d;
+      if (d < 500)            { threatScore += 4; }
+      else if (d < 900)       { threatScore += 2; }
+      else if (d < 1400)      { threatScore += 1; }
     }
 
-    // Player fleets currently en route to enemy home base
-    final inboundShips = _fleets
+    // Count player fleet MARKERS heading toward home base (enemy sees the marker, not the ships)
+    final inboundMarkerCount = _fleets
         .where((f) => f.owner == 'player' && f.destination == _enemyHomeBase)
-        .fold(0, (sum, f) => sum + f.ships);
+        .length;
+    // Each visible fleet marker is assumed to represent ~10 ships (rough estimate)
+    final estimatedInboundThreat = inboundMarkerCount * 10;
 
-    final base = nearestDist < 400 ? 25
-        : nearestDist < 800        ? 15
-        :                            8;
-
-    return base + (inboundShips * 0.5).ceil();
+    return math.max(5, threatScore * 3 + estimatedInboundThreat);
   }
 
-  // Checks whether the enemy should launch a focused assault on the player home base.
+  // Decides whether to launch a focused assault on the player's home base.
+  // The enemy uses only observable data plus estimates — no peeking at player ship counts.
   void _tryEnemyHomeBaseAssault(math.Random rand) {
     if (_playerHomeBase == null || !_playerHomeBase!.isMounted) return;
     if (_playerHomeBase!.owner != 'player') return;
 
-    final playerHomeShips = _playerHomeBase!.ships;
+    // Enemy knows its OWN total strength perfectly
+    final totalEnemyShips = _stars
+            .where((s) => _isEnemy(s.owner) && s.isMounted)
+            .fold(0, (n, s) => n + s.ships)
+        + _fleets
+            .where((f) => _isEnemy(f.owner))
+            .fold(0, (n, f) => n + f.ships);
 
-    // Candidate attack stars: enemy-owned, not the home base, has ships
+    // Enemy ESTIMATES player strength from visible star count only
+    // (assumes roughly 8 ships per player star — a rough, imperfect heuristic)
+    final visiblePlayerStars = _stars
+        .where((s) => s.owner == 'player' && s.isMounted)
+        .length;
+    final estimatedPlayerStrength = visiblePlayerStars * 8;
+
+    // Randomising factor: enemy confidence varies ±20% each turn
+    final confidenceFactor = 0.8 + rand.nextDouble() * 0.4; // 0.8–1.2
+    final perceivedAdvantage =
+        (totalEnemyShips / math.max(1, estimatedPlayerStrength)) * confidenceFactor;
+
+    // Find best non-home attack candidate closest to player home base
     final candidates = _stars
         .where((s) => _isEnemy(s.owner) && s.isMounted &&
             s != _enemyHomeBase && s.ships > 4)
@@ -974,32 +994,20 @@ class StardomainGame extends FlameGame {
           .compareTo((b.position - _playerHomeBase!.position).length2));
 
     if (candidates.isEmpty) return;
-
-    final totalEnemyShips = _stars
-            .where((s) => _isEnemy(s.owner) && s.isMounted)
-            .fold(0, (n, s) => n + s.ships)
-        + _fleets
-            .where((f) => _isEnemy(f.owner))
-            .fold(0, (n, f) => n + f.ships);
-
-    final totalPlayerShips = _stars
-            .where((s) => s.owner == 'player' && s.isMounted)
-            .fold(0, (n, s) => n + s.ships)
-        + _fleets
-            .where((f) => f.owner == 'player')
-            .fold(0, (n, f) => n + f.ships);
-
     final closest = candidates.first;
 
-    // Launch assault if enemy has overwhelming overall advantage
-    // OR the closest star has a strong local advantage over the player home base
-    final overallAdvantage = totalEnemyShips >= totalPlayerShips * 2;
-    final localAdvantage   = closest.ships >= playerHomeShips * 3;
-    if (!overallAdvantage && !localAdvantage) return;
+    // Decide to assault if:
+    //  a) Enemy feels it has a strong overall advantage (≥1.8× estimated player), OR
+    //  b) Closest star has accumulated a large force AND a random boldness check fires
+    final boldnessRoll    = rand.nextDouble();
+    final shouldAssault   = perceivedAdvantage >= 1.8 ||
+        (closest.ships >= 25 && boldnessRoll < 0.25);
 
-    // Send 70% of the closest star's ships toward the player home base
+    if (!shouldAssault) return;
+
+    // Send 70% of the closest star's ships — minimum 5 to avoid token assaults
     final shipsToSend = math.max(1, (closest.ships * 0.70).round());
-    if (shipsToSend < playerHomeShips) return; // don't send a doomed assault
+    if (shipsToSend < 5) return;
 
     closest.ships -= shipsToSend;
     final d     = (closest.position - _playerHomeBase!.position).length;
