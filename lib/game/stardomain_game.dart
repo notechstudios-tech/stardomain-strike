@@ -424,13 +424,24 @@ class StardomainGame extends FlameGame {
     for (int i = 0; i + 1 < wormholes.length; i += 2) {
       wormholes[i].wormholeTarget     = wormholes[i + 1];
       wormholes[i + 1].wormholeTarget = wormholes[i];
-      _addWormholeRing(wormholes[i]);
-      _addWormholeRing(wormholes[i + 1]);
+      // Rings are hidden until discovered by exploration — added in _discoverWormhole
     }
     // Odd one out: downgrade to friendly encounter
     if (wormholes.length.isOdd) {
       wormholes.last.specialType = SpecialStarType.friendlyEncounter;
     }
+  }
+
+  void _discoverWormhole(StarComponent star) {
+    if (star.wormholeDiscovered) return;
+    star.wormholeDiscovered = true;
+    _addWormholeRing(star);
+    _eventQueue.add(GameEvent(
+      title: 'Wormhole Discovered!',
+      detail: 'Your fleet has found a wormhole!\nSelect this star and tap WARP to transit ships.',
+      star: star,
+      accentColor: const Color(0xFF00E5FF),
+    ));
   }
 
   void _addWormholeRing(StarComponent star) {
@@ -471,6 +482,7 @@ class StardomainGame extends FlameGame {
         wormholeTargetIndex: star.wormholeTarget != null
             ? _stars.indexOf(star.wormholeTarget!)
             : -1,
+        wormholeDiscovered: star.wormholeDiscovered,
       ));
     }
 
@@ -569,14 +581,15 @@ class StardomainGame extends FlameGame {
       if (ss.owner != null) _applyCaptureRing(star, ss.owner!);
     }
 
-    // Wire up wormhole connections and add rings
+    // Wire up wormhole connections; restore rings only for already-discovered stars
     for (int i = 0; i < save.stars.length && i < _stars.length; i++) {
       final wti = save.stars[i].wormholeTargetIndex;
       if (wti >= 0 && wti < _stars.length) {
         _stars[i].wormholeTarget = _stars[wti];
       }
       if (_stars[i].specialType == SpecialStarType.wormhole &&
-          _stars[i].wormholeTarget != null) {
+          save.stars[i].wormholeDiscovered) {
+        _stars[i].wormholeDiscovered = true;
         _addWormholeRing(_stars[i]);
       }
     }
@@ -661,6 +674,9 @@ class StardomainGame extends FlameGame {
     // ─── Friendly reinforcement ───────────────────────────────────────────
     if (dest.owner == owner) {
       dest.ships += ships;
+      if (owner == 'player' && dest.specialType == SpecialStarType.wormhole) {
+        _discoverWormhole(dest);
+      }
       onHudChanged?.call();
       return;
     }
@@ -690,6 +706,9 @@ class StardomainGame extends FlameGame {
       dest.ships = attackers; // surviving attackers inherit the star
       dest.owner = owner;
       _applyCaptureRing(dest, owner);
+      if (owner == 'player' && dest.specialType == SpecialStarType.wormhole) {
+        _discoverWormhole(dest);
+      }
       // Track player-relevant outcomes
       if (owner == 'player') {
         battlesWon++;

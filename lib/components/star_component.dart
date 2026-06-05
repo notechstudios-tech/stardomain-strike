@@ -9,8 +9,9 @@ class StarComponent extends SpriteComponent {
   int ships;
   int resources;
   int defence;
-  SpecialStarType specialType = SpecialStarType.none;
-  StarComponent? wormholeTarget;
+  SpecialStarType specialType      = SpecialStarType.none;
+  StarComponent?  wormholeTarget;
+  bool            wormholeDiscovered = false;
 
   StarComponent({required this.config, required Sprite sprite})
       : owner = config.owner,

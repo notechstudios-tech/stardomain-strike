@@ -65,7 +65,8 @@ class _StarInfoOverlayState extends State<StarInfoOverlay> {
               ],
             ),
             if (star.specialType == SpecialStarType.wormhole &&
-                star.wormholeTarget != null) ...[
+                star.wormholeTarget != null &&
+                star.wormholeDiscovered) ...[
               const SizedBox(height: 10),
               _WarpControls(game: game),
             ],
