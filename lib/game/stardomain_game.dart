@@ -729,10 +729,15 @@ class StardomainGame extends FlameGame {
     final isPlayerAtk      = owner == 'player';
     final isPlayerDef      = prevOwner == 'player';
 
-    // Alter Reality: 10% chance defenders switch sides
+    // Alter Reality: 10% chance defenders switch sides before battle
     if (isPlayerAtk && hasTech(Technology.alterReality) && rand.nextDouble() < 0.1) {
       attackers += defenders;
       defenders  = 0;
+    }
+
+    // Force Fields: auto-destroy first 2 attackers when player defends
+    if (isPlayerDef && hasTech(Technology.forceFields)) {
+      attackers = math.max(0, attackers - 2);
     }
 
     // Surprise Attack: player gets a free kill before battle
@@ -744,24 +749,42 @@ class StardomainGame extends FlameGame {
       attackers--;
     }
 
+    // Helper: single attack roll respecting Improved Weapon Capacity
+    int singleRoll() => isPlayerAtk && hasTech(Technology.improvedWeaponCapacity)
+        ? rand.nextInt(11) + 1
+        : rand.nextInt(10) + 1;
+
+    int adaptiveBonus = 0; // Adaptive Shields — grows each time attacker misses
+
     while (attackers > 0 && defenders > 0) {
-      // Attacker roll with tech modifiers
-      var atkRoll = isPlayerAtk && hasTech(Technology.improvedWeaponCapacity)
-          ? rand.nextInt(11) + 1
-          : rand.nextInt(10) + 1;
+      // Attacker roll — Ion Cannon rolls twice and takes the higher
+      var atkRoll = isPlayerAtk && hasTech(Technology.ionCannon)
+          ? math.max(singleRoll(), singleRoll())
+          : singleRoll();
+
       if (isPlayerAtk && hasTech(Technology.quantumAttack) && rand.nextDouble() < 0.1) {
         atkRoll = math.min(atkRoll * 2, 20);
       }
       if (isPlayerAtk && hasTech(Technology.advancedWeapons)) atkRoll++;
+      // Berserker Protocol: last surviving attacker gets +3
+      if (isPlayerAtk && hasTech(Technology.berserkerProtocol) && attackers == 1) atkRoll += 3;
 
-      // Attack threshold with tech modifiers
-      int effectiveDefence = defence;
-      if (isPlayerDef && hasTech(Technology.advancedStarDefence))  effectiveDefence++;
-      if (isPlayerDef && hasTech(Technology.advancedShipDefence))  effectiveDefence++;
-      final baseThreshold  = isPlayerAtk && hasTech(Technology.improvedWeaponStrength) ? 5 : 6;
-      final atkThreshold   = math.min(10, baseThreshold + effectiveDefence);
+      // Attack threshold
+      int effectiveDefence = defence + adaptiveBonus;
+      if (isPlayerDef && hasTech(Technology.advancedStarDefence)) effectiveDefence++;
+      if (isPlayerDef && hasTech(Technology.advancedShipDefence)) effectiveDefence++;
+      // Precision Targeting: treat defence as 1 lower
+      if (isPlayerAtk && hasTech(Technology.precisionTargeting)) {
+        effectiveDefence = math.max(0, effectiveDefence - 1);
+      }
+      final baseThreshold = isPlayerAtk && hasTech(Technology.improvedWeaponStrength) ? 5 : 6;
+      final atkThreshold  = math.min(10, baseThreshold + effectiveDefence);
 
-      if (atkRoll >= atkThreshold) defenders--;
+      if (atkRoll >= atkThreshold) {
+        defenders--;
+      } else if (isPlayerDef && hasTech(Technology.adaptiveShields)) {
+        adaptiveBonus++; // attacker missed — shields learn and adapt
+      }
       if (defenders <= 0) break;
 
       // Defender roll — player attackers harder to kill with advancedShipDefence
@@ -771,6 +794,10 @@ class StardomainGame extends FlameGame {
 
     // Surviving ships stay at the star — not the starting count, the remainder
     if (attackers > 0) {
+      // Stellar Recycling: recover 25% of attacker ships lost (rounded up)
+      if (isPlayerAtk && hasTech(Technology.stellarRecycling)) {
+        attackers += ((initialAttackers - attackers) * 0.25).ceil();
+      }
       dest.ships = attackers;
       dest.owner = owner;
       _applyCaptureRing(dest, owner);

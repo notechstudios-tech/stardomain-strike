@@ -11,6 +11,12 @@ enum Technology {
   surpriseAttack,
   surpriseDefence,
   alterReality,
+  ionCannon,
+  berserkerProtocol,
+  precisionTargeting,
+  forceFields,
+  adaptiveShields,
+  stellarRecycling,
 }
 
 extension TechnologyInfo on Technology {
@@ -27,6 +33,12 @@ extension TechnologyInfo on Technology {
     Technology.surpriseAttack         => 'Surprise Attack',
     Technology.surpriseDefence        => 'Surprise Defence',
     Technology.alterReality           => 'Alter Reality',
+    Technology.ionCannon              => 'Ion Cannon',
+    Technology.berserkerProtocol      => 'Berserker Protocol',
+    Technology.precisionTargeting     => 'Precision Targeting',
+    Technology.forceFields            => 'Force Fields',
+    Technology.adaptiveShields        => 'Adaptive Shields',
+    Technology.stellarRecycling       => 'Stellar Recycling',
   };
 
   String get description => switch (this) {
@@ -42,5 +54,11 @@ extension TechnologyInfo on Technology {
     Technology.surpriseAttack         => 'Destroy one defender for free before battle begins.',
     Technology.surpriseDefence        => 'Destroy one attacker for free before battle begins.',
     Technology.alterReality           => '10% chance enemy ships join your fleet instead of fighting.',
+    Technology.ionCannon              => 'Roll twice on each attack and take the higher result.',
+    Technology.berserkerProtocol      => 'Your last surviving attacking ship gets +3 to every attack roll.',
+    Technology.precisionTargeting     => 'Your attacks treat every star\'s defence as 1 point lower.',
+    Technology.forceFields            => 'When defending, the first 2 attacking ships are auto-destroyed before battle.',
+    Technology.adaptiveShields        => 'Each time an attacker misses your defenders, defence increases by 1 for that battle.',
+    Technology.stellarRecycling       => 'After winning a battle, recover 25% of your ships lost in the attack.',
   };
 }
