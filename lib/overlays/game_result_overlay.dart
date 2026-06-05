@@ -12,7 +12,8 @@ class GameResultOverlay extends StatelessWidget {
 
     final isVictory = result == WinResult.playerElimination ||
                       result == WinResult.playerConquest    ||
-                      result == WinResult.playerDominance;
+                      result == WinResult.playerDominance   ||
+                      result == WinResult.enemyHomeBaseLost;
 
     final titleText  = isVictory ? 'YOU WIN!' : 'DEFEAT';
     final titleColor = isVictory ? const Color(0xFF66BB6A) : const Color(0xFFEF5350);
@@ -28,6 +29,10 @@ class GameResultOverlay extends StatelessWidget {
           'The enemy has conquered\nthe galaxy.',
       WinResult.playerDefeated =>
           'Your last star has fallen.',
+      WinResult.playerHomeBaseLost =>
+          'Your home star has been captured!\nThe empire crumbles without its heart.',
+      WinResult.enemyHomeBaseLost =>
+          'You have captured the enemy\'s\nhome star! Their empire collapses!',
     };
 
     return Container(

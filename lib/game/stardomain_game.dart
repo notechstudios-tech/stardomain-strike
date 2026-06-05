@@ -21,11 +21,13 @@ import '../services/storage_service.dart';
 enum GameState { menu, playing, transitioning }
 
 enum WinResult {
-  playerElimination, // player destroyed all enemy stars
-  playerConquest,    // player controls 80% of stars
-  playerDominance,   // player has ≥20 stars and 4× stars & ships → enemy surrenders
-  enemyConquest,     // enemy controls 80% of stars
-  playerDefeated,    // player has no stars left
+  playerElimination,   // player destroyed all enemy stars
+  playerConquest,      // player controls 80% of stars
+  playerDominance,     // player has ≥20 stars and 4× stars & ships → enemy surrenders
+  enemyConquest,       // enemy controls 80% of stars
+  playerDefeated,      // player has no stars left
+  playerHomeBaseLost,  // enemy captured the player's home star
+  enemyHomeBaseLost,   // player captured the enemy's home star
 }
 
 class StardomainGame extends FlameGame {
@@ -72,6 +74,9 @@ class StardomainGame extends FlameGame {
 
   WinResult? _gameResult;
   WinResult? get gameResult => _gameResult;
+
+  StarComponent? _playerHomeBase;
+  StarComponent? _enemyHomeBase;
 
   // Event queue for special star encounters and disasters
   final List<GameEvent>   _eventQueue = [];
@@ -325,6 +330,16 @@ class StardomainGame extends FlameGame {
   void backToMenu() => _showMenu();
 
   WinResult? _checkWinConditions() {
+    // Home base capture — checked first and immediately decisive
+    if (_playerHomeBase != null && _playerHomeBase!.isMounted &&
+        _playerHomeBase!.owner != 'player') {
+      return WinResult.playerHomeBaseLost;
+    }
+    if (_enemyHomeBase != null && _enemyHomeBase!.isMounted &&
+        !_isEnemy(_enemyHomeBase!.owner)) {
+      return WinResult.enemyHomeBaseLost;
+    }
+
     final allStars      = _stars.where((s) => s.isMounted).toList();
     final total         = allStars.length;
     if (total == 0) return null;
@@ -358,6 +373,7 @@ class StardomainGame extends FlameGame {
   void _applyNaturalDisasters(math.Random rand) {
     for (final star in _stars.toList()) {
       if (!star.isMounted) continue;
+      if (star == _playerHomeBase || star == _enemyHomeBase) continue; // immune
       if (rand.nextDouble() >= 0.002) continue; // 1 in 500
       final ownerDesc = star.owner == 'player' ? 'one of your stars'
           : _isEnemy(star.owner) ? 'an enemy star'
@@ -614,6 +630,19 @@ class StardomainGame extends FlameGame {
       if (ss.owner != null) _applyCaptureRing(star, ss.owner!);
     }
 
+    // Identify home bases by their fixed positions
+    for (final star in _stars) {
+      const eps = 1.0;
+      if ((star.position.x - playerStarX).abs() < eps &&
+          (star.position.y - playerStarY).abs() < eps) {
+        _playerHomeBase = star;
+      }
+      if ((star.position.x - enemyStarX).abs() < eps &&
+          (star.position.y - enemyStarY).abs() < eps) {
+        _enemyHomeBase = star;
+      }
+    }
+
     // Wire up wormhole connections; restore rings only for already-discovered stars
     for (int i = 0; i < save.stars.length && i < _stars.length; i++) {
       final wti = save.stars[i].wormholeTargetIndex;
@@ -846,7 +875,10 @@ class StardomainGame extends FlameGame {
   // ─── Enemy AI ─────────────────────────────────────────────────────────────
 
   void _runEnemyAI(math.Random rand) {
-    // Auto-move style: process stars in descending ship-count order
+    // 1. Strategic assessment: attempt a home-base assault if conditions are met
+    _tryEnemyHomeBaseAssault(rand);
+
+    // 2. Auto-move style: process stars in descending ship-count order
     final enemyStars = _stars
         .where((s) => _isEnemy(s.owner) && s.ships > 2 && s.isMounted)
         .toList()
@@ -857,7 +889,14 @@ class StardomainGame extends FlameGame {
         .toList();
 
     for (final star in enemyStars) {
-      // Find closest non-enemy star (auto-move: single target)
+      // Home base: enforce minimum garrison before sending any ships
+      final minGarrison = (star == _enemyHomeBase)
+          ? _enemyHomeBaseMinGarrison(playerStarList)
+          : 1;
+      final available = star.ships - minGarrison;
+      if (available <= 0) continue;
+
+      // Find closest non-enemy star
       final targets = _stars
           .where((s) => s.owner != star.owner && s.isMounted)
           .toList()
@@ -867,7 +906,7 @@ class StardomainGame extends FlameGame {
       if (targets.isEmpty) continue;
       final target = targets.first;
 
-      // Strategic conservatism: frontline stars near the player keep more ships
+      // Strategic conservatism: frontline stars keep more ships
       double nearestPlayer = double.infinity;
       for (final ps in playerStarList) {
         final d = (star.position - ps.position).length;
@@ -878,12 +917,11 @@ class StardomainGame extends FlameGame {
           : nearestPlayer < 800              ? 0.55
           :                                    0.85;
 
-      final maxSend = math.max(1, (star.ships * maxFraction).round());
-      final shipsToSend = rand.nextInt(maxSend) + 1; // 1..maxSend
-      if (shipsToSend >= star.ships) continue;       // always keep ≥1 ship
+      final maxSend = math.min(available, math.max(1, (star.ships * maxFraction).round()));
+      final shipsToSend = rand.nextInt(maxSend) + 1;
+      if (shipsToSend >= star.ships) continue;
 
       star.ships -= shipsToSend;
-
       final d = (star.position - target.position).length;
       final turns = math.max(1, (d / travelSpeed).ceil());
       _fleets.add(Fleet(
@@ -895,6 +933,85 @@ class StardomainGame extends FlameGame {
       ));
       _addFleetMarker(_fleets.last);
     }
+  }
+
+  // Returns the minimum ships the enemy must keep at its home base.
+  int _enemyHomeBaseMinGarrison(List<StarComponent> playerStarList) {
+    if (_enemyHomeBase == null) return 5;
+
+    // Distance from nearest player star to enemy home base
+    double nearestDist = double.infinity;
+    for (final ps in playerStarList) {
+      final d = (ps.position - _enemyHomeBase!.position).length;
+      if (d < nearestDist) nearestDist = d;
+    }
+
+    // Player fleets currently en route to enemy home base
+    final inboundShips = _fleets
+        .where((f) => f.owner == 'player' && f.destination == _enemyHomeBase)
+        .fold(0, (sum, f) => sum + f.ships);
+
+    final base = nearestDist < 400 ? 25
+        : nearestDist < 800        ? 15
+        :                            8;
+
+    return base + (inboundShips * 0.5).ceil();
+  }
+
+  // Checks whether the enemy should launch a focused assault on the player home base.
+  void _tryEnemyHomeBaseAssault(math.Random rand) {
+    if (_playerHomeBase == null || !_playerHomeBase!.isMounted) return;
+    if (_playerHomeBase!.owner != 'player') return;
+
+    final playerHomeShips = _playerHomeBase!.ships;
+
+    // Candidate attack stars: enemy-owned, not the home base, has ships
+    final candidates = _stars
+        .where((s) => _isEnemy(s.owner) && s.isMounted &&
+            s != _enemyHomeBase && s.ships > 4)
+        .toList()
+      ..sort((a, b) => (a.position - _playerHomeBase!.position).length2
+          .compareTo((b.position - _playerHomeBase!.position).length2));
+
+    if (candidates.isEmpty) return;
+
+    final totalEnemyShips = _stars
+            .where((s) => _isEnemy(s.owner) && s.isMounted)
+            .fold(0, (n, s) => n + s.ships)
+        + _fleets
+            .where((f) => _isEnemy(f.owner))
+            .fold(0, (n, f) => n + f.ships);
+
+    final totalPlayerShips = _stars
+            .where((s) => s.owner == 'player' && s.isMounted)
+            .fold(0, (n, s) => n + s.ships)
+        + _fleets
+            .where((f) => f.owner == 'player')
+            .fold(0, (n, f) => n + f.ships);
+
+    final closest = candidates.first;
+
+    // Launch assault if enemy has overwhelming overall advantage
+    // OR the closest star has a strong local advantage over the player home base
+    final overallAdvantage = totalEnemyShips >= totalPlayerShips * 2;
+    final localAdvantage   = closest.ships >= playerHomeShips * 3;
+    if (!overallAdvantage && !localAdvantage) return;
+
+    // Send 70% of the closest star's ships toward the player home base
+    final shipsToSend = math.max(1, (closest.ships * 0.70).round());
+    if (shipsToSend < playerHomeShips) return; // don't send a doomed assault
+
+    closest.ships -= shipsToSend;
+    final d     = (closest.position - _playerHomeBase!.position).length;
+    final turns = math.max(1, (d / travelSpeed).ceil());
+    _fleets.add(Fleet(
+      owner: closest.owner!,
+      origin: closest,
+      destination: _playerHomeBase!,
+      ships: shipsToSend,
+      turnsRemaining: turns,
+    ));
+    _addFleetMarker(_fleets.last);
   }
 
   // ─── Fleet marker helpers ─────────────────────────────────────────────────
@@ -1192,8 +1309,8 @@ class StardomainGame extends FlameGame {
     _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
     _spawnNeutralStars('star_light',  StarSize.light,  n - (n * 0.15).round() - (n * 0.35).round(), rand);
 
-    _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
-    _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
+    _playerHomeBase = _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
+    _enemyHomeBase  = _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
     _pairWormholes();
   }
 
@@ -1256,14 +1373,22 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  void _spawnOccupiedStar({
+  StarComponent _spawnOccupiedStar({
     required double x, required double y,
     required String owner, required String iconKey,
     required int ships, required int resources, required int defence,
   }) {
     final starSp = _sprites['star_large'];
     final iconSp = _sprites[iconKey];
-    if (starSp == null || iconSp == null) return;
+    if (starSp == null || iconSp == null) {
+      // Return a dummy star if sprites missing (shouldn't happen in practice)
+      final dummy = StarComponent(
+        config: StarConfig(size: StarSize.large, x: x, y: y, owner: owner,
+            ships: ships, resources: resources, defence: defence),
+        sprite: starSp ?? iconSp!,
+      );
+      return dummy;
+    }
     world.add(SpriteComponent(
       sprite: starSp, position: Vector2(x, y),
       anchor: Anchor.center, scale: Vector2.all(4.5),
@@ -1275,6 +1400,7 @@ class StardomainGame extends FlameGame {
     )..position = Vector2(x, y)..scale = Vector2.all(3.0);
     _stars.add(star);
     world.add(star);
+    return star;
   }
 
   bool _tooCloseToHome(double x, double y) {
@@ -1324,6 +1450,8 @@ class StardomainGame extends FlameGame {
     _fleetMarkers.clear();
     _captureRings.clear();
     _battleMarkers.clear();
+    _playerHomeBase = null;
+    _enemyHomeBase  = null;
     _wormholeRings.clear();
     _eventQueue.clear();
     _currentEvent = null;
