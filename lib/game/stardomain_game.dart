@@ -69,6 +69,7 @@ class StardomainGame extends FlameGame {
   final List<Fleet>                      _fleets        = [];
   final Map<Fleet, FleetMarker>          _fleetMarkers  = {};
   final Map<StarComponent, CaptureRing>  _captureRings  = {};
+  final Map<StarComponent, CaptureRing>  _activeRings   = {}; // stirred neutrals
   final List<PositionComponent>          _battleMarkers = [];
   final Map<StarComponent, WormholeRing> _wormholeRings = {};
   final List<StarAlliance>               _alliances     = [];
@@ -206,7 +207,20 @@ class StardomainGame extends FlameGame {
     _setTargetStar(target);
     _pendingAutoMoveStar = origin;
 
-    // Cinematic: pull fully out (2 s), then zoom into the action (3 s).
+    if (_isStarInView(origin) && _isStarInView(target)) {
+      // Both already on screen — just scroll to centre them, no zoom change.
+      final z = camera.viewfinder.zoom;
+      final midX = (origin.position.x + target.position.x) / 2;
+      final midY = (origin.position.y + target.position.y) / 2;
+      await _animateCamera(
+        toZoom: z,
+        toTopLeft: Vector2(midX - size.x / (2 * z), midY - size.y / (2 * z)),
+        seconds: 1.0,
+      );
+      return;
+    }
+
+    // Otherwise cinematic: pull fully out (2 s), then zoom into the action (3 s).
     await _animateCamera(
       toZoom: _universeFitZoom,
       toTopLeft: _universeCenterTopLeft(_universeFitZoom),
@@ -215,6 +229,19 @@ class StardomainGame extends FlameGame {
     if (_state != GameState.playing || _pendingAutoMoveStar != origin) return;
     final (zoom, topLeft) = _framingForStars(origin, target);
     await _animateCamera(toZoom: zoom, toTopLeft: topLeft, seconds: 3.0);
+  }
+
+  // True if the star sits comfortably within the current viewport (not clipped
+  // at the edges).
+  bool _isStarInView(StarComponent star) {
+    final z = camera.viewfinder.zoom;
+    final tl = camera.viewfinder.position;
+    final viewW = size.x / z, viewH = size.y / z;
+    final margin = star.radius + 20.0;
+    return star.position.x >= tl.x + margin &&
+        star.position.x <= tl.x + viewW - margin &&
+        star.position.y >= tl.y + margin &&
+        star.position.y <= tl.y + viewH - margin;
   }
 
   void warp() {
@@ -418,6 +445,7 @@ class StardomainGame extends FlameGame {
         ));
         if (star.owner == 'player') { shipsLost += star.ships; }
         _captureRings.remove(star)?.removeFromParent();
+        _activeRings.remove(star)?.removeFromParent();
         _wormholeRings.remove(star)?.removeFromParent();
         _stars.remove(star);
         star.removeFromParent();
@@ -711,7 +739,12 @@ class StardomainGame extends FlameGame {
       if (ss.iconKey == 'enemy_red')  { _enemyHomeBase  = star; _enemyHomePos  = star.position.clone(); }
 
       // Player-owned / main-enemy stars get capture rings; alliance rings handled below
-      if (ss.owner != null && !_isAlliance(ss.owner)) _applyCaptureRing(star, ss.owner!);
+      if (ss.owner != null && !_isAlliance(ss.owner)) {
+        _applyCaptureRing(star, ss.owner!);
+      } else if (ss.owner == null && ss.active) {
+        // Stirred independent neutral — restore its amber ring.
+        _applyActiveRing(star);
+      }
     }
 
     // Restore alliances (rebuild groups, add rings only for awakened ones)
@@ -948,6 +981,8 @@ class StardomainGame extends FlameGame {
       }
     } else {
       dest.ships = defenders;
+      // The attack failed but the star is now a stirred independent neutral.
+      if (dest.owner == null) _applyActiveRing(dest);
       if (isPlayerAtk) {
         battlesLost++;
         shipsLost += initialAttackers;
@@ -1139,6 +1174,8 @@ class StardomainGame extends FlameGame {
 
   void _applyCaptureRing(StarComponent star, String owner) {
     _captureRings.remove(star)?.removeFromParent();
+    // An owned star no longer needs the stirred-neutral ring.
+    _activeRings.remove(star)?.removeFromParent();
     final color = _ownerColor(owner);
     final ringMult = switch (star.config.size) {
       StarSize.light  => 3.2,
@@ -1151,6 +1188,23 @@ class StardomainGame extends FlameGame {
       starPosition: star.position.clone(),
     );
     _captureRings[star] = ring;
+    world.add(ring);
+  }
+
+  // Amber ring marking an independent neutral star stirred up by combat.
+  void _applyActiveRing(StarComponent star) {
+    if (_activeRings.containsKey(star)) return;
+    final ringMult = switch (star.config.size) {
+      StarSize.light  => 3.2,
+      StarSize.medium => 2.4,
+      StarSize.large  => 1.8,
+    };
+    final ring = CaptureRing(
+      color: const Color(0xFFFFB300), // amber — agitated neutral
+      ringRadius: star.radius * ringMult,
+      starPosition: star.position.clone(),
+    );
+    _activeRings[star] = ring;
     world.add(ring);
   }
 
@@ -1731,6 +1785,7 @@ class StardomainGame extends FlameGame {
     _fleets.clear();
     _fleetMarkers.clear();
     _captureRings.clear();
+    _activeRings.clear();
     _battleMarkers.clear();
     _playerHomeBase = null;
     _enemyHomeBase  = null;
