@@ -9,6 +9,7 @@ class StarSave {
   final String specialType;        // SpecialStarType.name
   final int    wormholeTargetIndex;   // -1 if not wormhole
   final bool   wormholeDiscovered;
+  final int    allianceId;            // -1 if not in an alliance
 
   const StarSave({
     required this.x,
@@ -22,6 +23,7 @@ class StarSave {
     this.specialType = 'none',
     this.wormholeTargetIndex = -1,
     this.wormholeDiscovered = false,
+    this.allianceId = -1,
   });
 
   Map<String, dynamic> toJson() => {
@@ -30,6 +32,7 @@ class StarSave {
     'specialType': specialType,
     'wormholeTargetIndex': wormholeTargetIndex,
     'wormholeDiscovered': wormholeDiscovered,
+    'allianceId': allianceId,
   };
 
   factory StarSave.fromJson(Map<String, dynamic> j) => StarSave(
@@ -44,6 +47,29 @@ class StarSave {
     specialType: j['specialType'] as String? ?? 'none',
     wormholeTargetIndex: j['wormholeTargetIndex'] as int? ?? -1,
     wormholeDiscovered: j['wormholeDiscovered'] as bool? ?? false,
+    allianceId: j['allianceId'] as int? ?? -1,
+  );
+}
+
+class AllianceSave {
+  final int id;
+  final int color;       // ARGB value
+  final bool isAwakened;
+
+  const AllianceSave({
+    required this.id,
+    required this.color,
+    required this.isAwakened,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'color': color, 'isAwakened': isAwakened,
+  };
+
+  factory AllianceSave.fromJson(Map<String, dynamic> j) => AllianceSave(
+    id: j['id'] as int,
+    color: j['color'] as int,
+    isAwakened: j['isAwakened'] as bool? ?? false,
   );
 }
 
@@ -86,6 +112,7 @@ class GameSave {
   final List<StarSave> stars;
   final List<FleetSave> fleets;
   final List<String> technologies;
+  final List<AllianceSave> alliances;
 
   const GameSave({
     required this.turn,
@@ -93,6 +120,7 @@ class GameSave {
     required this.stars,
     required this.fleets,
     this.technologies = const [],
+    this.alliances = const [],
   });
 
   String toJsonString() => jsonEncode({
@@ -101,6 +129,7 @@ class GameSave {
     'stars': stars.map((s) => s.toJson()).toList(),
     'fleets': fleets.map((f) => f.toJson()).toList(),
     'technologies': technologies,
+    'alliances': alliances.map((a) => a.toJson()).toList(),
   });
 
   factory GameSave.fromJsonString(String s) {
@@ -115,6 +144,10 @@ class GameSave {
           .map((e) => FleetSave.fromJson(e as Map<String, dynamic>))
           .toList(),
       technologies: (j['technologies'] as List?)?.cast<String>() ?? [],
+      alliances: (j['alliances'] as List?)
+              ?.map((e) => AllianceSave.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     );
   }
 }

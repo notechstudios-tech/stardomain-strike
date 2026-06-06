@@ -12,6 +12,7 @@ class StarComponent extends SpriteComponent {
   SpecialStarType specialType      = SpecialStarType.none;
   StarComponent?  wormholeTarget;
   bool            wormholeDiscovered = false;
+  int             allianceId = -1; // -1 = not in an alliance
 
   StarComponent({required this.config, required Sprite sprite})
       : owner = config.owner,

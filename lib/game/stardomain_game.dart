@@ -13,6 +13,7 @@ import '../components/star_component.dart';
 import '../models/game_event.dart';
 import '../models/technology.dart';
 import '../models/fleet.dart';
+import '../models/star_alliance.dart';
 import '../models/star_config.dart';
 import '../models/game_save.dart';
 import '../services/ads_service.dart';
@@ -69,6 +70,7 @@ class StardomainGame extends FlameGame {
   final Map<StarComponent, CaptureRing>  _captureRings  = {};
   final List<PositionComponent>          _battleMarkers = [];
   final Map<StarComponent, WormholeRing> _wormholeRings = {};
+  final List<StarAlliance>               _alliances     = [];
 
   Completer<void>? _battleReportCompleter;
 
@@ -77,6 +79,10 @@ class StardomainGame extends FlameGame {
 
   StarComponent? _playerHomeBase;
   StarComponent? _enemyHomeBase;
+
+  // Actual (randomized) home base positions — set during universe build
+  Vector2 _playerHomePos = Vector2(playerStarX, playerStarY);
+  Vector2 _enemyHomePos  = Vector2(enemyStarX,  enemyStarY);
 
   // Event queue for special star encounters and disasters
   final List<GameEvent>   _eventQueue = [];
@@ -270,9 +276,15 @@ class StardomainGame extends FlameGame {
     // 2. Enemy AI sends ships
     _runEnemyAI(rand);
 
-    // 3. Enemy fleets advance and battle
+    // 2b. Awakened alliances send ships at the player
+    _runAllianceAI(rand);
+
+    // 3. Enemy and alliance fleets advance and battle
     _advanceFleets('enemy_red', rand);
     _advanceFleets('enemy_blue', rand);
+    for (final a in _alliances.where((a) => a.isAwakened)) {
+      _advanceFleets(a.owner, rand);
+    }
 
     // 4. Production runs AFTER all battles so the player clearly sees
     //    the battle outcome before new ships are added.
@@ -280,6 +292,10 @@ class StardomainGame extends FlameGame {
       s.ships += s.resources + (hasTech(Technology.improvedProduction) ? 1 : 0);
     }
     for (final s in _stars.where((s) => _isEnemy(s.owner) && s.isMounted)) {
+      s.ships += s.resources;
+    }
+    // Awakened alliance stars also produce each turn
+    for (final s in _stars.where((s) => _isAlliance(s.owner) && s.isMounted)) {
       s.ships += s.resources;
     }
 
@@ -330,13 +346,14 @@ class StardomainGame extends FlameGame {
   void backToMenu() => _showMenu();
 
   WinResult? _checkWinConditions() {
-    // Home base capture — checked first and immediately decisive
+    // Home base capture — only the MAIN enemy / player matter here.
+    // Local alliances capturing a home base do NOT decide the game.
     if (_playerHomeBase != null && _playerHomeBase!.isMounted &&
-        _playerHomeBase!.owner != 'player') {
+        _isEnemy(_playerHomeBase!.owner)) {
       return WinResult.playerHomeBaseLost;
     }
     if (_enemyHomeBase != null && _enemyHomeBase!.isMounted &&
-        !_isEnemy(_enemyHomeBase!.owner)) {
+        _enemyHomeBase!.owner == 'player') {
       return WinResult.enemyHomeBaseLost;
     }
 
@@ -531,6 +548,7 @@ class StardomainGame extends FlameGame {
             ? _stars.indexOf(star.wormholeTarget!)
             : -1,
         wormholeDiscovered: star.wormholeDiscovered,
+        allianceId: star.allianceId,
       ));
     }
 
@@ -555,17 +573,18 @@ class StardomainGame extends FlameGame {
       stars: starSaves,
       fleets: fleetSaves,
       technologies: _playerTechs.map((t) => t.name).toList(),
+      alliances: _alliances.map((a) => AllianceSave(
+        id: a.id,
+        color: a.color.toARGB32(),
+        isAwakened: a.isAwakened,
+      )).toList(),
     ));
   }
 
-  // Home stars use icon sprites; neutral stars use star sprites.
-  // Infer by matching the two fixed home positions.
+  // Home stars use icon sprites; identified by their home-base references.
   String? _homeStarIconKey(StarComponent star) {
-    const eps = 1.0;
-    if ((star.position.x - playerStarX).abs() < eps &&
-        (star.position.y - playerStarY).abs() < eps) { return 'enemy_blue'; }
-    if ((star.position.x - enemyStarX).abs() < eps &&
-        (star.position.y - enemyStarY).abs() < eps) { return 'enemy_red'; }
+    if (star == _playerHomeBase) return 'enemy_blue';
+    if (star == _enemyHomeBase)  return 'enemy_red';
     return null;
   }
 
@@ -621,25 +640,36 @@ class StardomainGame extends FlameGame {
         'friendlyEncounter' => SpecialStarType.friendlyEncounter,
         'ancientTrap'       => SpecialStarType.ancientTrap,
         'wormhole'          => SpecialStarType.wormhole,
+        'ancientRuins'      => SpecialStarType.ancientRuins,
         _                   => SpecialStarType.none,
       };
+      star.allianceId = ss.allianceId;
 
       _stars.add(star);
       world.add(star);
 
-      if (ss.owner != null) _applyCaptureRing(star, ss.owner!);
+      // Home bases identified by their icon key
+      if (ss.iconKey == 'enemy_blue') { _playerHomeBase = star; _playerHomePos = star.position.clone(); }
+      if (ss.iconKey == 'enemy_red')  { _enemyHomeBase  = star; _enemyHomePos  = star.position.clone(); }
+
+      // Player-owned / main-enemy stars get capture rings; alliance rings handled below
+      if (ss.owner != null && !_isAlliance(ss.owner)) _applyCaptureRing(star, ss.owner!);
     }
 
-    // Identify home bases by their fixed positions
-    for (final star in _stars) {
-      const eps = 1.0;
-      if ((star.position.x - playerStarX).abs() < eps &&
-          (star.position.y - playerStarY).abs() < eps) {
-        _playerHomeBase = star;
-      }
-      if ((star.position.x - enemyStarX).abs() < eps &&
-          (star.position.y - enemyStarY).abs() < eps) {
-        _enemyHomeBase = star;
+    // Restore alliances (rebuild groups, add rings only for awakened ones)
+    for (final as in save.alliances) {
+      final members = _stars.where((s) => s.allianceId == as.id).toList();
+      if (members.isEmpty) continue;
+      final alliance = StarAlliance(
+        id: as.id,
+        stars: members,
+        color: Color(as.color),
+      )..isAwakened = as.isAwakened;
+      _alliances.add(alliance);
+      if (as.isAwakened) {
+        for (final m in members) {
+          if (m.owner != null && _isAlliance(m.owner)) _applyCaptureRing(m, m.owner!);
+        }
       }
     }
 
@@ -701,6 +731,15 @@ class StardomainGame extends FlameGame {
 
   void _processArrival(String owner, StarComponent dest, int ships, math.Random rand) {
     if (!dest.isMounted) return;
+
+    // ─── Alliance awakening ───────────────────────────────────────────────
+    // A player or main-enemy attack on a dormant alliance star wakes the group.
+    if (dest.allianceId >= 0 && (owner == 'player' || _isEnemy(owner))) {
+      final alliance = _allianceById(dest.allianceId);
+      if (alliance != null && !alliance.isAwakened) {
+        _awakenAlliance(alliance);
+      }
+    }
 
     // ─── Ancient Trap ─────────────────────────────────────────────────────
     if (dest.specialType == SpecialStarType.ancientTrap) {
@@ -1025,7 +1064,10 @@ class StardomainGame extends FlameGame {
   // ─── Fleet marker helpers ─────────────────────────────────────────────────
 
   void _addFleetMarker(Fleet fleet) {
-    final marker = FleetMarker(fleet: fleet)..updatePosition();
+    final allianceColor = _isAlliance(fleet.owner)
+        ? _allianceById(int.parse(fleet.owner.substring('alliance_'.length)))?.color
+        : null;
+    final marker = FleetMarker(fleet: fleet, allianceColor: allianceColor)..updatePosition();
     _fleetMarkers[fleet] = marker;
     world.add(marker);
   }
@@ -1038,9 +1080,7 @@ class StardomainGame extends FlameGame {
 
   void _applyCaptureRing(StarComponent star, String owner) {
     _captureRings.remove(star)?.removeFromParent();
-    final color = owner == 'player'
-        ? const Color(0xFF42A5F5) // blue
-        : const Color(0xFFEF5350); // red
+    final color = _ownerColor(owner);
     final ringMult = switch (star.config.size) {
       StarSize.light  => 3.2,
       StarSize.medium => 2.4,
@@ -1053,6 +1093,16 @@ class StardomainGame extends FlameGame {
     );
     _captureRings[star] = ring;
     world.add(ring);
+  }
+
+  Color _ownerColor(String owner) {
+    if (owner == 'player') return const Color(0xFF42A5F5); // blue
+    if (_isEnemy(owner))   return const Color(0xFFEF5350); // red
+    if (_isAlliance(owner)) {
+      final a = _allianceById(int.parse(owner.substring('alliance_'.length)));
+      if (a != null) return a.color;
+    }
+    return const Color(0xFFEF5350);
   }
 
   // ─── Input ────────────────────────────────────────────────────────────────
@@ -1267,7 +1317,11 @@ class StardomainGame extends FlameGame {
     unawaited(StorageService.clearSave());
     _stopMusic();
     _playMusic('level_music.wav');
-    camera.viewfinder.position = Vector2(playerStarX - size.x / 2, playerStarY - size.y / 2);
+    camera.viewfinder.position = Vector2(
+      _playerHomePos.x - size.x / 2,
+      _playerHomePos.y - size.y / 2,
+    );
+    _clampCamera();
     _showMessage('Home Star - Start!');
     await Future.delayed(const Duration(seconds: 2));
     overlays.remove(overlayMessage);
@@ -1312,14 +1366,168 @@ class StardomainGame extends FlameGame {
   void _buildUniverse(math.Random rand) {
     _buildCosmetics(rand);
 
+    // 1. Home bases first — randomized and significantly spaced apart
+    _placeHomeBases(rand);
+    _playerHomeBase = _spawnOccupiedStar(
+        x: _playerHomePos.x, y: _playerHomePos.y,
+        owner: 'player', iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
+    _enemyHomeBase = _spawnOccupiedStar(
+        x: _enemyHomePos.x, y: _enemyHomePos.y,
+        owner: 'enemy_red', iconKey: 'enemy_red', ships: 10, resources: 3, defence: 1);
+
+    // 2. Neutral stars, with special stars sprinkled in
     final n = neutralStarCount;
     _spawnNeutralStars('star_large',  StarSize.large,  (n * 0.15).round(), rand);
     _spawnNeutralStars('star_medium', StarSize.medium, (n * 0.35).round(), rand);
     _spawnNeutralStars('star_light',  StarSize.light,  n - (n * 0.15).round() - (n * 0.35).round(), rand);
 
-    _playerHomeBase = _spawnOccupiedStar(x: playerStarX, y: playerStarY, owner: 'player',    iconKey: 'enemy_blue', ships: 10, resources: 3, defence: 1);
-    _enemyHomeBase  = _spawnOccupiedStar(x: enemyStarX,  y: enemyStarY,  owner: 'enemy_red', iconKey: 'enemy_red',  ships: 10, resources: 3, defence: 1);
+    // 3. Pair up wormholes
     _pairWormholes();
+
+    // 4. Distribute hidden neutral alliances across remaining independent stars
+    _formAlliances(rand);
+  }
+
+  // Places the two home bases on opposite sides of the universe, well apart.
+  void _placeHomeBases(math.Random rand) {
+    _playerHomePos = Vector2(
+      400 + rand.nextDouble() * 500,           // x: 400–900 (left side)
+      300 + rand.nextDouble() * (universeHeight - 600), // y: 300..1300
+    );
+    _enemyHomePos = Vector2(
+      universeWidth - 900 + rand.nextDouble() * 500,    // x: 2300–2800 (right side)
+      300 + rand.nextDouble() * (universeHeight - 600),
+    );
+  }
+
+  // Distinct alliance ring colors — none resemble player (blue/green) or enemy (red).
+  static const List<int> _allianceColors = [
+    0xFFAB47BC, // purple
+    0xFFFFA726, // orange
+    0xFFFFEE58, // yellow
+    0xFFEC407A, // pink
+    0xFFD4E157, // lime-yellow
+    0xFF8D6E63, // brown
+    0xFFFF7043, // deep orange
+    0xFFBA68C8, // light purple
+  ];
+
+  // Groups ~20% of neutral stars into hidden alliances of adjacent stars.
+  // 15% of all neutral stars end up in 2–3 star groups; 5% in 4–5 star groups.
+  void _formAlliances(math.Random rand) {
+    // Eligible: neutral (unowned), non-special, not a home base
+    final eligible = _stars.where((s) =>
+        s.owner == null &&
+        s.specialType == SpecialStarType.none &&
+        s.allianceId < 0).toList();
+    if (eligible.length < 2) return;
+
+    final targetAllianceStars = (eligible.length * 0.20).round();
+    final available = List<StarComponent>.from(eligible);
+    int assigned = 0;
+    int nextId = 0;
+    const maxClusterDist = 650.0;
+
+    while (assigned < targetAllianceStars && available.isNotEmpty) {
+      // Group size: 75% chance 2–3 stars, 25% chance 4–5 stars
+      final bigGroup = rand.nextDouble() < 0.25;
+      final groupSize = bigGroup ? 4 + rand.nextInt(2) : 2 + rand.nextInt(2);
+
+      // Pick a random seed star
+      final seed = available[rand.nextInt(available.length)];
+      // Find nearest available neighbours within cluster distance
+      final neighbours = available
+          .where((s) => s != seed &&
+              (s.position - seed.position).length <= maxClusterDist)
+          .toList()
+        ..sort((a, b) => (a.position - seed.position).length2
+            .compareTo((b.position - seed.position).length2));
+
+      if (neighbours.isEmpty) {
+        // Lone star — can't form a group; remove from pool and continue
+        available.remove(seed);
+        continue;
+      }
+
+      final members = <StarComponent>[seed];
+      for (final nb in neighbours) {
+        if (members.length >= groupSize) break;
+        members.add(nb);
+      }
+      if (members.length < 2) { available.remove(seed); continue; }
+
+      final color = Color(_allianceColors[rand.nextInt(_allianceColors.length)]);
+      final alliance = StarAlliance(id: nextId, stars: members, color: color);
+      for (final m in members) {
+        m.allianceId = nextId;
+        available.remove(m);
+      }
+      _alliances.add(alliance);
+      assigned += members.length;
+      nextId++;
+    }
+  }
+
+  // Wakes a dormant alliance: all still-neutral members become a local enemy.
+  void _awakenAlliance(StarAlliance alliance) {
+    alliance.isAwakened = true;
+    for (final s in alliance.stars) {
+      if (!s.isMounted) continue;
+      if (s.owner == null) {
+        s.owner = alliance.owner;
+        _applyCaptureRing(s, alliance.owner);
+      }
+    }
+    final focus = alliance.stars.firstWhere(
+      (s) => s.isMounted,
+      orElse: () => alliance.stars.first,
+    );
+    _eventQueue.add(GameEvent(
+      title: 'Star Alliance Awakened!',
+      detail: 'A coalition of ${alliance.stars.length} stars has risen up\nto defend its territory!',
+      star: focus,
+      accentColor: alliance.color,
+    ));
+  }
+
+  // Awakened alliances produce ships and launch attacks at the player each turn.
+  void _runAllianceAI(math.Random rand) {
+    for (final alliance in _alliances) {
+      if (!alliance.isAwakened) continue;
+
+      final ownedStars = alliance.stars
+          .where((s) => s.isMounted && s.owner == alliance.owner && s.ships > 3)
+          .toList()
+        ..sort((a, b) => b.ships.compareTo(a.ships));
+
+      for (final star in ownedStars) {
+        // Target the nearest player star
+        final targets = _stars
+            .where((s) => s.owner == 'player' && s.isMounted)
+            .toList()
+          ..sort((a, b) => (a.position - star.position).length2
+              .compareTo((b.position - star.position).length2));
+        if (targets.isEmpty) continue;
+        final target = targets.first;
+
+        // Send a randomized portion (keep some at home)
+        final maxSend = math.max(1, (star.ships * 0.6).round());
+        final shipsToSend = rand.nextInt(maxSend) + 1;
+        if (shipsToSend >= star.ships) continue;
+
+        star.ships -= shipsToSend;
+        final d = (star.position - target.position).length;
+        final turns = math.max(1, (d / travelSpeed).ceil());
+        _fleets.add(Fleet(
+          owner: alliance.owner,
+          origin: star,
+          destination: target,
+          ships: shipsToSend,
+          turnsRemaining: turns,
+        ));
+        _addFleetMarker(_fleets.last);
+      }
+    }
   }
 
   void _buildCosmetics(math.Random rand) {
@@ -1413,12 +1621,19 @@ class StardomainGame extends FlameGame {
 
   bool _tooCloseToHome(double x, double y) {
     const d = 150.0;
-    final dpx = x - playerStarX; final dpy = y - playerStarY;
-    final dex = x - enemyStarX;  final dey = y - enemyStarY;
+    final dpx = x - _playerHomePos.x; final dpy = y - _playerHomePos.y;
+    final dex = x - _enemyHomePos.x;  final dey = y - _enemyHomePos.y;
     return (dpx*dpx + dpy*dpy) < d*d || (dex*dex + dey*dey) < d*d;
   }
 
   bool _isEnemy(String? owner) => owner == 'enemy_red' || owner == 'enemy_blue';
+
+  bool _isAlliance(String? owner) => owner != null && owner.startsWith('alliance_');
+
+  StarAlliance? _allianceById(int id) {
+    for (final a in _alliances) { if (a.id == id) return a; }
+    return null;
+  }
 
   // ─── Seeding ──────────────────────────────────────────────────────────────
 
@@ -1460,6 +1675,7 @@ class StardomainGame extends FlameGame {
     _battleMarkers.clear();
     _playerHomeBase = null;
     _enemyHomeBase  = null;
+    _alliances.clear();
     _wormholeRings.clear();
     _eventQueue.clear();
     _currentEvent = null;

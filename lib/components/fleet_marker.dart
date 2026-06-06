@@ -6,6 +6,7 @@ import '../models/fleet.dart';
 
 class FleetMarker extends PositionComponent {
   final Fleet fleet;
+  final Color? allianceColor; // non-null for neutral-alliance fleets
   bool isSelected = false;
 
   static const double _r = 10.0;
@@ -15,8 +16,13 @@ class FleetMarker extends PositionComponent {
   static final _outline      = Paint()..color = const Color(0xBBFFFFFF)..style = ui.PaintingStyle.stroke..strokeWidth = 1.5;
   static final _textPaint    = TextPaint(style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold));
 
-  FleetMarker({required this.fleet})
+  FleetMarker({required this.fleet, this.allianceColor})
       : super(size: Vector2.all(_r * 2), anchor: Anchor.center);
+
+  Color get _color {
+    if (allianceColor != null) return allianceColor!;
+    return fleet.owner == 'player' ? const Color(0xFF66BB6A) : const Color(0xFFEF5350);
+  }
 
   void updatePosition() {
     if (fleet.totalTurns <= 0) return;
@@ -29,8 +35,13 @@ class FleetMarker extends PositionComponent {
 
   @override
   void render(Canvas canvas) {
-    final fill = fleet.owner == 'player' ? _playerFill : _enemyFill;
-    final selColor = fleet.owner == 'player' ? const Color(0xFF66BB6A) : const Color(0xFFEF5350);
+    final Paint fill;
+    if (allianceColor != null) {
+      fill = Paint()..color = allianceColor!..style = ui.PaintingStyle.fill;
+    } else {
+      fill = fleet.owner == 'player' ? _playerFill : _enemyFill;
+    }
+    final selColor = _color;
 
     canvas.drawCircle(Offset.zero, _r, fill);
     canvas.drawCircle(Offset.zero, _r, _outline);
