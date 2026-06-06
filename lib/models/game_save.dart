@@ -10,6 +10,7 @@ class StarSave {
   final int    wormholeTargetIndex;   // -1 if not wormhole
   final bool   wormholeDiscovered;
   final int    allianceId;            // -1 if not in an alliance
+  final bool   active;                // true once attacked / engaged in combat
 
   const StarSave({
     required this.x,
@@ -24,6 +25,7 @@ class StarSave {
     this.wormholeTargetIndex = -1,
     this.wormholeDiscovered = false,
     this.allianceId = -1,
+    this.active = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -33,6 +35,7 @@ class StarSave {
     'wormholeTargetIndex': wormholeTargetIndex,
     'wormholeDiscovered': wormholeDiscovered,
     'allianceId': allianceId,
+    'active': active,
   };
 
   factory StarSave.fromJson(Map<String, dynamic> j) => StarSave(
@@ -48,6 +51,7 @@ class StarSave {
     wormholeTargetIndex: j['wormholeTargetIndex'] as int? ?? -1,
     wormholeDiscovered: j['wormholeDiscovered'] as bool? ?? false,
     allianceId: j['allianceId'] as int? ?? -1,
+    active: j['active'] as bool? ?? false,
   );
 }
 

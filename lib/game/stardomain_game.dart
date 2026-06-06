@@ -1,8 +1,9 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show Color;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
+import 'package:flutter/animation.dart' show Curves;
 import 'package:audioplayers/audioplayers.dart';
 import '../components/battle_marker.dart';
 import '../components/capture_ring.dart';
@@ -24,7 +25,7 @@ enum GameState { menu, playing, transitioning }
 enum WinResult {
   playerElimination,   // player destroyed all enemy stars
   playerConquest,      // player controls 80% of stars
-  playerDominance,     // player has ≥20 stars and 4× stars & ships → enemy surrenders
+  playerDominance,     // player has â‰¥20 stars and 4Ã— stars & ships â†’ enemy surrenders
   enemyConquest,       // enemy controls 80% of stars
   playerDefeated,      // player has no stars left
   playerHomeBaseLost,  // enemy captured the player's home star
@@ -80,7 +81,7 @@ class StardomainGame extends FlameGame {
   StarComponent? _playerHomeBase;
   StarComponent? _enemyHomeBase;
 
-  // Actual (randomized) home base positions — set during universe build
+  // Actual (randomized) home base positions â€” set during universe build
   Vector2 _playerHomePos = Vector2(playerStarX, playerStarY);
   Vector2 _enemyHomePos  = Vector2(enemyStarX,  enemyStarY);
 
@@ -123,7 +124,7 @@ class StardomainGame extends FlameGame {
   void Function()?       onActionChanged;
   void Function(StarComponent?)? onStarSelected;
 
-  // ─── Public accessors ────────────────────────────────────────────────────
+  // â”€â”€â”€ Public accessors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   int get currentTurn      => _currentTurn;
   int get totalPlayerShips => _stars.where((s) => s.owner == 'player' && s.isMounted).fold(0, (sum, s) => sum + s.ships);
@@ -179,7 +180,7 @@ class StardomainGame extends FlameGame {
     onHudChanged?.call();
   }
 
-  void autoMove() {
+  Future<void> autoMove() async {
     if (_state != GameState.playing) return;
 
     final candidates = _stars
@@ -203,8 +204,17 @@ class StardomainGame extends FlameGame {
     _deselectAll();
     _setFirstStar(origin);
     _setTargetStar(target);
-    _zoomToShowStars(origin, target);
     _pendingAutoMoveStar = origin;
+
+    // Cinematic: pull fully out (2 s), then zoom into the action (3 s).
+    await _animateCamera(
+      toZoom: _universeFitZoom,
+      toTopLeft: _universeCenterTopLeft(_universeFitZoom),
+      seconds: 2.0,
+    );
+    if (_state != GameState.playing || _pendingAutoMoveStar != origin) return;
+    final (zoom, topLeft) = _framingForStars(origin, target);
+    await _animateCamera(toZoom: zoom, toTopLeft: topLeft, seconds: 3.0);
   }
 
   void warp() {
@@ -235,22 +245,22 @@ class StardomainGame extends FlameGame {
     onHudChanged?.call();
   }
 
-  void _zoomToShowStars(StarComponent a, StarComponent b) {
+  // Zoom + top-left that frames both stars, zoomed out a bit for surroundings.
+  (double, Vector2) _framingForStars(StarComponent a, StarComponent b) {
     const padding = 160.0;
     final midX  = (a.position.x + b.position.x) / 2;
     final midY  = (a.position.y + b.position.y) / 2;
     final spanW = (a.position.x - b.position.x).abs() + padding * 2;
     final spanH = (a.position.y - b.position.y).abs() + padding * 2;
-    final newZoom = math.min(size.x / spanW, size.y / spanH).clamp(0.3, 3.0);
-    camera.viewfinder.zoom = newZoom;
-    camera.viewfinder.position = Vector2(
-      midX - size.x / (2 * newZoom),
-      midY - size.y / (2 * newZoom),
+    final fit = math.min(size.x / spanW, size.y / spanH);
+    final zoom = (fit / 1.5).clamp(0.3, 3.0);
+    return (
+      zoom,
+      Vector2(midX - size.x / (2 * zoom), midY - size.y / (2 * zoom)),
     );
-    _clampCamera();
   }
 
-  // ─── Turn processing ──────────────────────────────────────────────────────
+  // â”€â”€â”€ Turn processing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> endTurn() async {
     if (_state != GameState.playing) return;
@@ -306,11 +316,11 @@ class StardomainGame extends FlameGame {
 
     _currentTurn++;
 
-    // 6. Show queued events (special stars, disasters) — camera pans to each
+    // 6. Show queued events (special stars, disasters) â€” camera pans to each
     await _processEventQueue();
     if (_state == GameState.menu) return;
 
-    // 7. Show battle report — user can pan/zoom to inspect markers on the map
+    // 7. Show battle report â€” user can pan/zoom to inspect markers on the map
     _battleReportCompleter = Completer<void>();
     overlays.add(overlayBattleReport);
     await _battleReportCompleter!.future;
@@ -346,7 +356,7 @@ class StardomainGame extends FlameGame {
   void backToMenu() => _showMenu();
 
   WinResult? _checkWinConditions() {
-    // Home base capture ends the game no matter who took it — the main enemy
+    // Home base capture ends the game no matter who took it â€” the main enemy
     // OR a neutral alliance capturing a home base decides it.
     if (_playerHomeBase != null && _playerHomeBase!.isMounted &&
         _playerHomeBase!.owner != 'player') {
@@ -373,7 +383,7 @@ class StardomainGame extends FlameGame {
     if (playerStarCount >= threshold) return WinResult.playerConquest;
     if (enemyStarCount  >= threshold) return WinResult.enemyConquest;
 
-    // Dominance surrender: ≥20 stars and 4× stars AND 4× total ships (stars + fleets)
+    // Dominance surrender: â‰¥20 stars and 4Ã— stars AND 4Ã— total ships (stars + fleets)
     if (playerStarCount >= 20 && playerStarCount >= enemyStarCount * 4) {
       final playerShips = allStars.where((s) => s.owner == 'player').fold(0, (n, s) => n + s.ships)
           + _fleets.where((f) => f.owner == 'player').fold(0, (n, f) => n + f.ships);
@@ -385,12 +395,15 @@ class StardomainGame extends FlameGame {
     return null;
   }
 
-  // ─── Special stars & disasters ───────────────────────────────────────────
+  // â”€â”€â”€ Special stars & disasters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _applyNaturalDisasters(math.Random rand) {
     for (final star in _stars.toList()) {
       if (!star.isMounted) continue;
       if (star == _playerHomeBase || star == _enemyHomeBase) continue; // immune
+      // Dormant neutral stars (never attacked) are immune â€” only stars in play
+      // (owned by a participant, or neutral stars that have been attacked) suffer.
+      if (star.owner == null && !star.active) continue;
       if (rand.nextDouble() >= 0.002) continue; // 1 in 500
       final ownerDesc = star.owner == 'player' ? 'one of your stars'
           : _isEnemy(star.owner) ? 'an enemy star'
@@ -409,7 +422,7 @@ class StardomainGame extends FlameGame {
         _stars.remove(star);
         star.removeFromParent();
       } else {
-        // Population collapse: ships, resources, defence → 0
+        // Population collapse: ships, resources, defence â†’ 0
         _eventQueue.add(GameEvent(
           title: 'Population Collapse!',
           detail: 'Internal catastrophe has ravaged $ownerDesc.\nShips, production, and defence have been lost.',
@@ -427,13 +440,34 @@ class StardomainGame extends FlameGame {
   Future<void> _processEventQueue() async {
     for (final event in _eventQueue) {
       if (_state == GameState.menu) break;
-      if (event.star != null && event.star!.isMounted) {
-        _focusCameraOnStar(event.star!);
-        _showEventRing(event.star!);
-      }
+      final star = event.star;
+      final hasStar = star != null && star.isMounted;
+
+      // 1. Pull back to view the entire universe (2 s).
+      await _animateCamera(
+        toZoom: _universeFitZoom,
+        toTopLeft: _universeCenterTopLeft(_universeFitZoom),
+        seconds: 2.0,
+      );
+      if (_state == GameState.menu) break;
+
+      // 2. Show the report on the wide shot.
+      if (hasStar) _showEventRing(star);
       _currentEvent = event;
       overlays.add(overlayEvent);
-      await Future.delayed(const Duration(seconds: 5));
+      await Future.delayed(const Duration(milliseconds: 1500));
+      if (_state == GameState.menu) break;
+
+      // 3. Zoom in to the affected star (3 s) while the report stays visible.
+      if (hasStar) {
+        await _animateCamera(
+          toZoom: 1.5,
+          toTopLeft: _starFocusTopLeft(star, 1.5),
+          seconds: 3.0,
+        );
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
+
       overlays.remove(overlayEvent);
       _currentEvent = null;
       _hideEventRing();
@@ -441,14 +475,36 @@ class StardomainGame extends FlameGame {
     _eventQueue.clear();
   }
 
-  void _focusCameraOnStar(StarComponent star) {
-    const zoom = 1.5;
-    camera.viewfinder.zoom = zoom;
-    camera.viewfinder.position = Vector2(
-      star.position.x - size.x / (2 * zoom),
-      star.position.y - size.y / (2 * zoom),
+  // Most zoomed-out level that fits the whole universe on screen.
+  double get _universeFitZoom =>
+      math.min(size.x / universeWidth, size.y / universeHeight);
+
+  Vector2 _universeCenterTopLeft(double zoom) => Vector2(
+        (universeWidth  - size.x / zoom) / 2,
+        (universeHeight - size.y / zoom) / 2,
+      );
+
+  Vector2 _starFocusTopLeft(StarComponent star, double zoom) => Vector2(
+        star.position.x - size.x / (2 * zoom),
+        star.position.y - size.y / (2 * zoom),
+      );
+
+  // Smoothly tween camera zoom + position over [seconds]; completes when done.
+  Future<void> _animateCamera({
+    required double toZoom,
+    required Vector2 toTopLeft,
+    required double seconds,
+  }) {
+    final tween = _CameraTween(
+      this,
+      fromZoom: camera.viewfinder.zoom,
+      toZoom: toZoom,
+      fromPos: camera.viewfinder.position.clone(),
+      toPos: toTopLeft,
+      duration: seconds,
     );
-    _clampCamera();
+    add(tween);
+    return tween.future;
   }
 
   void _showEventRing(StarComponent star) {
@@ -468,7 +524,7 @@ class StardomainGame extends FlameGame {
     for (int i = 0; i + 1 < wormholes.length; i += 2) {
       wormholes[i].wormholeTarget     = wormholes[i + 1];
       wormholes[i + 1].wormholeTarget = wormholes[i];
-      // Rings are hidden until discovered by exploration — added in _discoverWormhole
+      // Rings are hidden until discovered by exploration â€” added in _discoverWormhole
     }
     // Odd one out: downgrade to friendly encounter
     if (wormholes.length.isOdd) {
@@ -524,7 +580,7 @@ class StardomainGame extends FlameGame {
     unawaited(StorageService.clearSave());
   }
 
-  // ─── Persistence ──────────────────────────────────────────────────────────
+  // â”€â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _saveGameState() async {
     final starSaves = <StarSave>[];
@@ -549,6 +605,7 @@ class StardomainGame extends FlameGame {
             : -1,
         wormholeDiscovered: star.wormholeDiscovered,
         allianceId: star.allianceId,
+        active: star.active,
       ));
     }
 
@@ -644,6 +701,7 @@ class StardomainGame extends FlameGame {
         _                   => SpecialStarType.none,
       };
       star.allianceId = ss.allianceId;
+      star.active = ss.active;
 
       _stars.add(star);
       world.add(star);
@@ -732,7 +790,7 @@ class StardomainGame extends FlameGame {
   void _processArrival(String owner, StarComponent dest, int ships, math.Random rand) {
     if (!dest.isMounted) return;
 
-    // ─── Alliance awakening ───────────────────────────────────────────────
+    // â”€â”€â”€ Alliance awakening â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // A player or main-enemy attack on a dormant alliance star wakes the group.
     if (dest.allianceId >= 0 && (owner == 'player' || _isEnemy(owner))) {
       final alliance = _allianceById(dest.allianceId);
@@ -741,9 +799,9 @@ class StardomainGame extends FlameGame {
       }
     }
 
-    // ─── Ancient Trap ─────────────────────────────────────────────────────
+    // â”€â”€â”€ Ancient Trap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (dest.specialType == SpecialStarType.ancientTrap) {
-      dest.specialType = SpecialStarType.none; // trap sprung — gone forever
+      dest.specialType = SpecialStarType.none; // trap sprung â€” gone forever
       final isPlayer = owner == 'player';
       _eventQueue.add(GameEvent(
         title: 'Ancient Trap!',
@@ -758,7 +816,7 @@ class StardomainGame extends FlameGame {
       return;
     }
 
-    // ─── Friendly Encounter (player only) ────────────────────────────────
+    // â”€â”€â”€ Friendly Encounter (player only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (owner == 'player' && dest.specialType == SpecialStarType.friendlyEncounter) {
       final bonus = rand.nextInt(20) + 1;
       dest.specialType = SpecialStarType.none;
@@ -777,7 +835,7 @@ class StardomainGame extends FlameGame {
       return;
     }
 
-    // ─── Friendly reinforcement ───────────────────────────────────────────
+    // â”€â”€â”€ Friendly reinforcement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (dest.owner == owner) {
       dest.ships += ships;
       if (owner == 'player' && dest.specialType == SpecialStarType.wormhole) {
@@ -787,7 +845,8 @@ class StardomainGame extends FlameGame {
       return;
     }
 
-    // ─── Battle ───────────────────────────────────────────────────────────
+    // â”€â”€â”€ Battle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    dest.active = true; // engaged in combat â€” now subject to natural disasters
     final prevOwner        = dest.owner;
     int attackers          = ships;
     final initialAttackers = attackers;
@@ -822,10 +881,10 @@ class StardomainGame extends FlameGame {
         ? rand.nextInt(11) + 1
         : rand.nextInt(10) + 1;
 
-    int adaptiveBonus = 0; // Adaptive Shields — grows each time attacker misses
+    int adaptiveBonus = 0; // Adaptive Shields â€” grows each time attacker misses
 
     while (attackers > 0 && defenders > 0) {
-      // Attacker roll — Ion Cannon rolls twice and takes the higher
+      // Attacker roll â€” Ion Cannon rolls twice and takes the higher
       var atkRoll = isPlayerAtk && hasTech(Technology.ionCannon)
           ? math.max(singleRoll(), singleRoll())
           : singleRoll();
@@ -851,16 +910,16 @@ class StardomainGame extends FlameGame {
       if (atkRoll >= atkThreshold) {
         defenders--;
       } else if (isPlayerDef && hasTech(Technology.adaptiveShields)) {
-        adaptiveBonus++; // attacker missed — shields learn and adapt
+        adaptiveBonus++; // attacker missed â€” shields learn and adapt
       }
       if (defenders <= 0) break;
 
-      // Defender roll — player attackers harder to kill with advancedShipDefence
+      // Defender roll â€” player attackers harder to kill with advancedShipDefence
       final defThreshold = isPlayerAtk && hasTech(Technology.advancedShipDefence) ? 7 : 6;
       if (rand.nextInt(10) + 1 >= defThreshold) attackers--;
     }
 
-    // Surviving ships stay at the star — not the starting count, the remainder
+    // Surviving ships stay at the star â€” not the starting count, the remainder
     if (attackers > 0) {
       // Stellar Recycling: recover 25% of attacker ships lost (rounded up)
       if (isPlayerAtk && hasTech(Technology.stellarRecycling)) {
@@ -911,7 +970,7 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  // ─── Enemy AI ─────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Enemy AI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _runEnemyAI(math.Random rand) {
     // 1. Strategic assessment: attempt a home-base assault if conditions are met
@@ -979,7 +1038,7 @@ class StardomainGame extends FlameGame {
   int _enemyHomeBaseMinGarrison(List<StarComponent> playerStarList) {
     if (_enemyHomeBase == null) return 5;
 
-    // Count visible player stars by proximity — the enemy sees colored dots, not ship counts
+    // Count visible player stars by proximity â€” the enemy sees colored dots, not ship counts
     int threatScore = 0;
     for (final ps in playerStarList) {
       final d = (ps.position - _enemyHomeBase!.position).length;
@@ -999,7 +1058,7 @@ class StardomainGame extends FlameGame {
   }
 
   // Decides whether to launch a focused assault on the player's home base.
-  // The enemy uses only observable data plus estimates — no peeking at player ship counts.
+  // The enemy uses only observable data plus estimates â€” no peeking at player ship counts.
   void _tryEnemyHomeBaseAssault(math.Random rand) {
     if (_playerHomeBase == null || !_playerHomeBase!.isMounted) return;
     if (_playerHomeBase!.owner != 'player') return;
@@ -1013,14 +1072,14 @@ class StardomainGame extends FlameGame {
             .fold(0, (n, f) => n + f.ships);
 
     // Enemy ESTIMATES player strength from visible star count only
-    // (assumes roughly 8 ships per player star — a rough, imperfect heuristic)
+    // (assumes roughly 8 ships per player star â€” a rough, imperfect heuristic)
     final visiblePlayerStars = _stars
         .where((s) => s.owner == 'player' && s.isMounted)
         .length;
     final estimatedPlayerStrength = visiblePlayerStars * 8;
 
-    // Randomising factor: enemy confidence varies ±20% each turn
-    final confidenceFactor = 0.8 + rand.nextDouble() * 0.4; // 0.8–1.2
+    // Randomising factor: enemy confidence varies Â±20% each turn
+    final confidenceFactor = 0.8 + rand.nextDouble() * 0.4; // 0.8â€“1.2
     final perceivedAdvantage =
         (totalEnemyShips / math.max(1, estimatedPlayerStrength)) * confidenceFactor;
 
@@ -1036,7 +1095,7 @@ class StardomainGame extends FlameGame {
     final closest = candidates.first;
 
     // Decide to assault if:
-    //  a) Enemy feels it has a strong overall advantage (≥1.8× estimated player), OR
+    //  a) Enemy feels it has a strong overall advantage (â‰¥1.8Ã— estimated player), OR
     //  b) Closest star has accumulated a large force AND a random boldness check fires
     final boldnessRoll    = rand.nextDouble();
     final shouldAssault   = perceivedAdvantage >= 1.8 ||
@@ -1044,7 +1103,7 @@ class StardomainGame extends FlameGame {
 
     if (!shouldAssault) return;
 
-    // Send 70% of the closest star's ships — minimum 5 to avoid token assaults
+    // Send 70% of the closest star's ships â€” minimum 5 to avoid token assaults
     final shipsToSend = math.max(1, (closest.ships * 0.70).round());
     if (shipsToSend < 5) return;
 
@@ -1061,7 +1120,7 @@ class StardomainGame extends FlameGame {
     _addFleetMarker(_fleets.last);
   }
 
-  // ─── Fleet marker helpers ─────────────────────────────────────────────────
+  // â”€â”€â”€ Fleet marker helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _addFleetMarker(Fleet fleet) {
     final allianceColor = _isAlliance(fleet.owner)
@@ -1076,7 +1135,7 @@ class StardomainGame extends FlameGame {
     _fleetMarkers.remove(fleet)?.removeFromParent();
   }
 
-  // ─── Capture ring helpers ──────────────────────────────────────────────────
+  // â”€â”€â”€ Capture ring helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _applyCaptureRing(StarComponent star, String owner) {
     _captureRings.remove(star)?.removeFromParent();
@@ -1105,7 +1164,7 @@ class StardomainGame extends FlameGame {
     return const Color(0xFFEF5350);
   }
 
-  // ─── Input ────────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void handleTap(Vector2 screenPos) {
     if (_state != GameState.playing) return;
@@ -1227,10 +1286,10 @@ class StardomainGame extends FlameGame {
       camera.viewfinder.zoom = newZoom;
     }
     if (panDelta.length2 > 0) camera.viewfinder.position -= panDelta / camera.viewfinder.zoom;
-    _clampCamera();
+    clampCamera();
   }
 
-  void _clampCamera() {
+  void clampCamera() {
     final z = camera.viewfinder.zoom;
     final maxX = (universeWidth  - size.x / z).clamp(0.0, universeWidth);
     final maxY = (universeHeight - size.y / z).clamp(0.0, universeHeight);
@@ -1240,7 +1299,7 @@ class StardomainGame extends FlameGame {
     camera.viewfinder.position = pos;
   }
 
-  // ─── Lifecycle ────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   @override
   Future<void> onLoad() async {
@@ -1262,7 +1321,7 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  // ─── Menu ─────────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _showMenu() {
     _state = GameState.menu;
@@ -1303,7 +1362,7 @@ class StardomainGame extends FlameGame {
     }
   }
 
-  // ─── Game start ───────────────────────────────────────────────────────────
+  // â”€â”€â”€ Game start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> startGame() async {
     overlays.remove(overlayMenu);
@@ -1321,7 +1380,7 @@ class StardomainGame extends FlameGame {
       _playerHomePos.x - size.x / 2,
       _playerHomePos.y - size.y / 2,
     );
-    _clampCamera();
+    clampCamera();
     _showMessage('Home Star - Start!');
     await Future.delayed(const Duration(seconds: 2));
     overlays.remove(overlayMessage);
@@ -1355,18 +1414,18 @@ class StardomainGame extends FlameGame {
       home.position.x - size.x / 2,
       home.position.y - size.y / 2,
     );
-    _clampCamera();
+    clampCamera();
 
     _state = GameState.playing;
     onHudChanged?.call();
   }
 
-  // ─── Universe ─────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Universe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _buildUniverse(math.Random rand) {
     _buildCosmetics(rand);
 
-    // 1. Home bases first — randomized and significantly spaced apart
+    // 1. Home bases first â€” randomized and significantly spaced apart
     _placeHomeBases(rand);
     _playerHomeBase = _spawnOccupiedStar(
         x: _playerHomePos.x, y: _playerHomePos.y,
@@ -1391,16 +1450,16 @@ class StardomainGame extends FlameGame {
   // Places the two home bases on opposite sides of the universe, well apart.
   void _placeHomeBases(math.Random rand) {
     _playerHomePos = Vector2(
-      400 + rand.nextDouble() * 500,           // x: 400–900 (left side)
+      400 + rand.nextDouble() * 500,           // x: 400â€“900 (left side)
       300 + rand.nextDouble() * (universeHeight - 600), // y: 300..1300
     );
     _enemyHomePos = Vector2(
-      universeWidth - 900 + rand.nextDouble() * 500,    // x: 2300–2800 (right side)
+      universeWidth - 900 + rand.nextDouble() * 500,    // x: 2300â€“2800 (right side)
       300 + rand.nextDouble() * (universeHeight - 600),
     );
   }
 
-  // Distinct alliance ring colors — none resemble player (blue/green) or enemy (red).
+  // Distinct alliance ring colors â€” none resemble player (blue/green) or enemy (red).
   static const List<int> _allianceColors = [
     0xFFAB47BC, // purple
     0xFFFFA726, // orange
@@ -1413,7 +1472,7 @@ class StardomainGame extends FlameGame {
   ];
 
   // Groups ~20% of neutral stars into hidden alliances of adjacent stars.
-  // 15% of all neutral stars end up in 2–3 star groups; 5% in 4–5 star groups.
+  // 15% of all neutral stars end up in 2â€“3 star groups; 5% in 4â€“5 star groups.
   void _formAlliances(math.Random rand) {
     // Eligible: neutral (unowned), non-special, not a home base
     final eligible = _stars.where((s) =>
@@ -1429,7 +1488,7 @@ class StardomainGame extends FlameGame {
     const maxClusterDist = 650.0;
 
     while (assigned < targetAllianceStars && available.isNotEmpty) {
-      // Group size: 75% chance 2–3 stars, 25% chance 4–5 stars
+      // Group size: 75% chance 2â€“3 stars, 25% chance 4â€“5 stars
       final bigGroup = rand.nextDouble() < 0.25;
       final groupSize = bigGroup ? 4 + rand.nextInt(2) : 2 + rand.nextInt(2);
 
@@ -1444,7 +1503,7 @@ class StardomainGame extends FlameGame {
             .compareTo((b.position - seed.position).length2));
 
       if (neighbours.isEmpty) {
-        // Lone star — can't form a group; remove from pool and continue
+        // Lone star â€” can't form a group; remove from pool and continue
         available.remove(seed);
         continue;
       }
@@ -1635,7 +1694,7 @@ class StardomainGame extends FlameGame {
     return null;
   }
 
-  // ─── Seeding ──────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Seeding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   int _randomResources(math.Random r) {
     final v = r.nextDouble();
@@ -1649,7 +1708,7 @@ class StardomainGame extends FlameGame {
 
   int _randomShips(math.Random r) => r.nextInt(5) + 1;
 
-  // ─── Message ──────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _showMessage(String text) {
     messageText = text;
@@ -1657,7 +1716,7 @@ class StardomainGame extends FlameGame {
     overlays.add(overlayMessage);
   }
 
-  // ─── Audio ────────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Audio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _playMusic(String f) {
     _bgm.setReleaseMode(ReleaseMode.loop);
@@ -1665,7 +1724,7 @@ class StardomainGame extends FlameGame {
   }
   void _stopMusic() => _bgm.stop();
 
-  // ─── Cleanup ──────────────────────────────────────────────────────────────
+  // â”€â”€â”€ Cleanup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   void _clearAll() {
     _stars.clear();
@@ -1691,3 +1750,39 @@ class StardomainGame extends FlameGame {
     world.removeAll(world.children.toList());
   }
 }
+
+/// Drives the camera viewfinder from one zoom+position to another over a fixed
+/// duration with an ease-in-out curve, then removes itself and completes.
+class _CameraTween extends Component {
+  final StardomainGame game;
+  final double fromZoom, toZoom, duration;
+  final Vector2 fromPos, toPos;
+  final Completer<void> _done = Completer<void>();
+  double _elapsed = 0;
+
+  _CameraTween(
+    this.game, {
+    required this.fromZoom,
+    required this.toZoom,
+    required this.fromPos,
+    required this.toPos,
+    required this.duration,
+  });
+
+  Future<void> get future => _done.future;
+
+  @override
+  void update(double dt) {
+    _elapsed += dt;
+    final raw = duration <= 0 ? 1.0 : (_elapsed / duration).clamp(0.0, 1.0);
+    final e = Curves.easeInOut.transform(raw);
+    game.camera.viewfinder.zoom = fromZoom + (toZoom - fromZoom) * e;
+    game.camera.viewfinder.position = fromPos + (toPos - fromPos) * e;
+    game.clampCamera();
+    if (raw >= 1.0) {
+      removeFromParent();
+      if (!_done.isCompleted) _done.complete();
+    }
+  }
+}
+

@@ -13,6 +13,7 @@ class StarComponent extends SpriteComponent {
   StarComponent?  wormholeTarget;
   bool            wormholeDiscovered = false;
   int             allianceId = -1; // -1 = not in an alliance
+  bool            active = false;  // true once attacked / engaged in combat
 
   StarComponent({required this.config, required Sprite sprite})
       : owner = config.owner,
