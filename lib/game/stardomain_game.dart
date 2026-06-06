@@ -346,14 +346,14 @@ class StardomainGame extends FlameGame {
   void backToMenu() => _showMenu();
 
   WinResult? _checkWinConditions() {
-    // Home base capture — only the MAIN enemy / player matter here.
-    // Local alliances capturing a home base do NOT decide the game.
+    // Home base capture ends the game no matter who took it — the main enemy
+    // OR a neutral alliance capturing a home base decides it.
     if (_playerHomeBase != null && _playerHomeBase!.isMounted &&
-        _isEnemy(_playerHomeBase!.owner)) {
+        _playerHomeBase!.owner != 'player') {
       return WinResult.playerHomeBaseLost;
     }
     if (_enemyHomeBase != null && _enemyHomeBase!.isMounted &&
-        _enemyHomeBase!.owner == 'player') {
+        !_isEnemy(_enemyHomeBase!.owner)) {
       return WinResult.enemyHomeBaseLost;
     }
 

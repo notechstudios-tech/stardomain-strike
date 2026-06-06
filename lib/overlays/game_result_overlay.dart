@@ -32,7 +32,7 @@ class GameResultOverlay extends StatelessWidget {
       WinResult.playerHomeBaseLost =>
           'Your home star has been captured!\nThe empire crumbles without its heart.',
       WinResult.enemyHomeBaseLost =>
-          'You have captured the enemy\'s\nhome star! Their empire collapses!',
+          'The enemy\'s home star has fallen!\nTheir empire collapses!',
     };
 
     return Container(
