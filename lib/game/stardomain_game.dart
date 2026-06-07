@@ -207,8 +207,10 @@ class StardomainGame extends FlameGame {
     _setTargetStar(target);
     _pendingAutoMoveStar = origin;
 
-    if (_isStarInView(origin) && _isStarInView(target)) {
-      // Both already on screen — just scroll to centre them, no zoom change.
+    // If either star is already on screen — or within roughly one screen of it
+    // — just scroll over rather than doing the zoom-out/in cinematic.
+    if (_isStarInView(origin, expandScreens: 1.0) ||
+        _isStarInView(target, expandScreens: 1.0)) {
       final z = camera.viewfinder.zoom;
       final midX = (origin.position.x + target.position.x) / 2;
       final midY = (origin.position.y + target.position.y) / 2;
@@ -231,17 +233,18 @@ class StardomainGame extends FlameGame {
     await _animateCamera(toZoom: zoom, toTopLeft: topLeft, seconds: 3.0);
   }
 
-  // True if the star sits comfortably within the current viewport (not clipped
-  // at the edges).
-  bool _isStarInView(StarComponent star) {
+  // True if the star is within the current viewport, optionally expanded by
+  // [expandScreens] screen-widths/heights of margin on every side.
+  bool _isStarInView(StarComponent star, {double expandScreens = 0.0}) {
     final z = camera.viewfinder.zoom;
     final tl = camera.viewfinder.position;
     final viewW = size.x / z, viewH = size.y / z;
-    final margin = star.radius + 20.0;
-    return star.position.x >= tl.x + margin &&
-        star.position.x <= tl.x + viewW - margin &&
-        star.position.y >= tl.y + margin &&
-        star.position.y <= tl.y + viewH - margin;
+    final ex = viewW * expandScreens;
+    final ey = viewH * expandScreens;
+    return star.position.x >= tl.x - ex &&
+        star.position.x <= tl.x + viewW + ex &&
+        star.position.y >= tl.y - ey &&
+        star.position.y <= tl.y + viewH + ey;
   }
 
   void warp() {
