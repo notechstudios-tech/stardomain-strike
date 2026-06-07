@@ -38,7 +38,6 @@ class StardomainGame extends FlameGame {
   static const String overlayHud          = 'hud';
   static const String overlayStarInfo     = 'starInfo';
   static const String overlayAction       = 'action';
-  static const String overlayBattleReport = 'battleReport';
   static const String overlayGameResult   = 'gameResult';
   static const String overlayEvent        = 'event';
 
@@ -74,7 +73,7 @@ class StardomainGame extends FlameGame {
   final Map<StarComponent, WormholeRing> _wormholeRings = {};
   final List<StarAlliance>               _alliances     = [];
 
-  Completer<void>? _battleReportCompleter;
+  Completer<void>? _eventAdvanceCompleter; // resolved when user taps a report
 
   WinResult? _gameResult;
   WinResult? get gameResult => _gameResult;
@@ -346,14 +345,9 @@ class StardomainGame extends FlameGame {
 
     _currentTurn++;
 
-    // 6. Show queued events (special stars, disasters) â€” camera pans to each
+    // 6. Show queued events â€” disasters and per-battle reports; camera pans to
+    //    each affected star in turn.
     await _processEventQueue();
-    if (_state == GameState.menu) return;
-
-    // 7. Show battle report â€” user can pan/zoom to inspect markers on the map
-    _battleReportCompleter = Completer<void>();
-    overlays.add(overlayBattleReport);
-    await _battleReportCompleter!.future;
     if (_state == GameState.menu) return;
 
     // Remove markers now that the new turn begins
@@ -375,12 +369,6 @@ class StardomainGame extends FlameGame {
     unawaited(_saveGameState());
     _state = GameState.playing;
     onHudChanged?.call();
-  }
-
-  void dismissBattleReport() {
-    overlays.remove(overlayBattleReport);
-    _battleReportCompleter?.complete();
-    _battleReportCompleter = null;
   }
 
   void backToMenu() => _showMenu();
@@ -469,41 +457,53 @@ class StardomainGame extends FlameGame {
   }
 
   Future<void> _processEventQueue() async {
+    const focusZoom = 1.5;
+    Vector2? prevStarPos; // last focused star — for continuous star-to-star pans
     for (final event in _eventQueue) {
       if (_state == GameState.menu) break;
       final star = event.star;
       final hasStar = star != null && star.isMounted;
 
-      // 1. Pull back to view the entire universe (2 s).
-      await _animateCamera(
-        toZoom: _universeFitZoom,
-        toTopLeft: _universeCenterTopLeft(_universeFitZoom),
-        seconds: 2.0,
-      );
-      if (_state == GameState.menu) break;
+      // Move to the affected star: zoom in for the first one, then a quick
+      // continuous pan between subsequent stars (no full zoom-out).
+      if (hasStar) {
+        final double seconds;
+        if (prevStarPos == null) {
+          seconds = 1.5; // ease into the first affected star
+        } else {
+          final dist = (star.position - prevStarPos).length;
+          seconds = (dist / 2200).clamp(0.5, 1.3); // quick, scaled by distance
+        }
+        await _animateCamera(
+          toZoom: focusZoom,
+          toTopLeft: _starFocusTopLeft(star, focusZoom),
+          seconds: seconds,
+        );
+        if (_state == GameState.menu) break;
+        _showEventRing(star);
+        prevStarPos = star.position.clone();
+      }
 
-      // 2. Show the report on the wide shot.
-      if (hasStar) _showEventRing(star);
+      // Show the report and wait for the user to tap before moving on.
       _currentEvent = event;
       overlays.add(overlayEvent);
-      await Future.delayed(const Duration(milliseconds: 1500));
-      if (_state == GameState.menu) break;
-
-      // 3. Zoom in to the affected star (3 s) while the report stays visible.
-      if (hasStar) {
-        await _animateCamera(
-          toZoom: 1.5,
-          toTopLeft: _starFocusTopLeft(star, 1.5),
-          seconds: 3.0,
-        );
-        await Future.delayed(const Duration(milliseconds: 800));
-      }
+      _eventAdvanceCompleter = Completer<void>();
+      await _eventAdvanceCompleter!.future;
 
       overlays.remove(overlayEvent);
       _currentEvent = null;
       _hideEventRing();
+      if (_state == GameState.menu) break;
     }
     _eventQueue.clear();
+  }
+
+  // Called from the event overlay when the user taps to advance.
+  void advanceEvent() {
+    if (_eventAdvanceCompleter != null && !_eventAdvanceCompleter!.isCompleted) {
+      _eventAdvanceCompleter!.complete();
+    }
+    _eventAdvanceCompleter = null;
   }
 
   // Most zoomed-out level that fits the whole universe on screen.
@@ -976,11 +976,19 @@ class StardomainGame extends FlameGame {
         starsGained++;
         shipsLost += initialAttackers - attackers;
         _addBattleMarker(dest, won: true);
+        _queueBattleEvent(dest, 'Star Captured!', won: true,
+            shipsLeft: attackers,
+            shipsLost: initialAttackers - attackers,
+            oppDestroyed: initialDefenders);
       } else if (isPlayerDef) {
         battlesLost++;
         starsLost++;
         shipsLost += initialDefenders;
         _addBattleMarker(dest, won: false);
+        _queueBattleEvent(dest, 'Star Lost!', won: false,
+            shipsLeft: attackers,
+            shipsLost: initialDefenders,
+            oppDestroyed: initialAttackers - attackers);
       }
     } else {
       dest.ships = defenders;
@@ -990,9 +998,38 @@ class StardomainGame extends FlameGame {
         battlesLost++;
         shipsLost += initialAttackers;
         _addBattleMarker(dest, won: false);
+        _queueBattleEvent(dest, 'Attack Repelled', won: false,
+            shipsLeft: defenders,
+            shipsLost: initialAttackers,
+            oppDestroyed: initialDefenders - defenders);
+      } else if (isPlayerDef) {
+        battlesWon++;
+        _addBattleMarker(dest, won: true);
+        _queueBattleEvent(dest, 'Star Defended!', won: true,
+            shipsLeft: defenders,
+            shipsLost: initialDefenders - defenders,
+            oppDestroyed: initialAttackers);
       }
     }
     onHudChanged?.call();
+  }
+
+  void _queueBattleEvent(
+    StarComponent star,
+    String title, {
+    required bool won,
+    required int shipsLeft,
+    required int shipsLost,
+    required int oppDestroyed,
+  }) {
+    _eventQueue.add(GameEvent(
+      title: title,
+      detail: 'Ships Left: $shipsLeft\n'
+          'Ships Lost: $shipsLost\n'
+          'Opponent Ships Destroyed: $oppDestroyed',
+      star: star,
+      accentColor: won ? const Color(0xFF66BB6A) : const Color(0xFFEF5350),
+    ));
   }
 
   void _addBattleMarker(StarComponent star, {required bool won}) {
@@ -1383,9 +1420,7 @@ class StardomainGame extends FlameGame {
   void _showMenu() {
     _state = GameState.menu;
     _stopMusic();
-    overlays.remove(overlayBattleReport);
-    _battleReportCompleter?.complete();
-    _battleReportCompleter = null;
+    advanceEvent(); // unblock any in-flight event report
     _clearAll();
     _spawnMenuStarfield();
     camera.viewfinder.position = Vector2.zero();
