@@ -7,6 +7,7 @@ class StarAlliance {
   final Color color;
   late final String owner; // 'alliance_<id>'
   bool isAwakened;
+  int awakenedTurn = -1; // turn it awakened; -1 if dormant or loaded from save
 
   StarAlliance({
     required this.id,

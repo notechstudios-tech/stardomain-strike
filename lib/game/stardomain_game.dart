@@ -40,6 +40,7 @@ class StardomainGame extends FlameGame {
   static const String overlayAction       = 'action';
   static const String overlayGameResult   = 'gameResult';
   static const String overlayEvent        = 'event';
+  static const String overlayReports      = 'reports';
 
   static const double universeWidth   = 3200;
   static const double universeHeight  = 1600;
@@ -74,6 +75,10 @@ class StardomainGame extends FlameGame {
   final List<StarAlliance>               _alliances     = [];
 
   Completer<void>? _eventAdvanceCompleter; // resolved when user taps a report
+
+  // Player-facing report history (turn number + event), newest appended last.
+  final List<(int, GameEvent)> _reportHistory = [];
+  List<(int, GameEvent)> get reportHistory => _reportHistory;
 
   WinResult? _gameResult;
   WinResult? get gameResult => _gameResult;
@@ -230,6 +235,19 @@ class StardomainGame extends FlameGame {
     if (_state != GameState.playing || _pendingAutoMoveStar != origin) return;
     final (zoom, topLeft) = _framingForStars(origin, target);
     await _animateCamera(toZoom: zoom, toTopLeft: topLeft, seconds: 3.0);
+  }
+
+  bool get isAutoMovePending => _pendingAutoMoveStar != null;
+
+  // Skip the current auto-move star without sending ships: mark it done and
+  // advance to the next candidate star.
+  void skipAutoMove() {
+    final origin = _pendingAutoMoveStar;
+    if (origin == null) return;
+    _autoMovedStars.add(origin);
+    _pendingAutoMoveStar = null;
+    _deselectAll();
+    autoMove();
   }
 
   // True if the star is within the current viewport, optionally expanded by
@@ -428,13 +446,15 @@ class StardomainGame extends FlameGame {
           : 'a neutral star';
       if (rand.nextBool()) {
         // Supernova: star destroyed
-        _eventQueue.add(GameEvent(
-          title: 'Supernova!',
-          detail: 'A catastrophic supernova has destroyed $ownerDesc!\nAll ${star.ships} ships were lost.',
-          star: star,
-          accentColor: const Color(0xFFFF9800),
-        ));
-        if (star.owner == 'player') { shipsLost += star.ships; }
+        if (star.owner == 'player') {
+          _eventQueue.add(GameEvent(
+            title: 'Supernova!',
+            detail: 'A catastrophic supernova has destroyed $ownerDesc!\nAll ${star.ships} ships were lost.',
+            star: star,
+            accentColor: const Color(0xFFFF9800),
+          ));
+          shipsLost += star.ships;
+        }
         _captureRings.remove(star)?.removeFromParent();
         _activeRings.remove(star)?.removeFromParent();
         _wormholeRings.remove(star)?.removeFromParent();
@@ -442,13 +462,15 @@ class StardomainGame extends FlameGame {
         star.removeFromParent();
       } else {
         // Population collapse: ships, resources, defence â†’ 0
-        _eventQueue.add(GameEvent(
-          title: 'Population Collapse!',
-          detail: 'Internal catastrophe has ravaged $ownerDesc.\nShips, production, and defence have been lost.',
-          star: star,
-          accentColor: const Color(0xFFFF9800),
-        ));
-        if (star.owner == 'player') { shipsLost += star.ships; }
+        if (star.owner == 'player') {
+          _eventQueue.add(GameEvent(
+            title: 'Population Collapse!',
+            detail: 'Internal catastrophe has ravaged $ownerDesc.\nShips, production, and defence have been lost.',
+            star: star,
+            accentColor: const Color(0xFFFF9800),
+          ));
+          shipsLost += star.ships;
+        }
         star.ships = 0;
         star.resources = 0;
         star.defence = 0;
@@ -463,6 +485,10 @@ class StardomainGame extends FlameGame {
       if (_state == GameState.menu) break;
       final star = event.star;
       final hasStar = star != null && star.isMounted;
+
+      // Record in the player's report history (label with the turn that ended).
+      _reportHistory.add((_currentTurn - 1, event));
+      if (_reportHistory.length > 200) _reportHistory.removeAt(0);
 
       // Move to the affected star: zoom in for the first one, then a quick
       // continuous pan between subsequent stars (no full zoom-out).
@@ -505,6 +531,9 @@ class StardomainGame extends FlameGame {
     }
     _eventAdvanceCompleter = null;
   }
+
+  void showReports() => overlays.add(overlayReports);
+  void hideReports() => overlays.remove(overlayReports);
 
   // Most zoomed-out level that fits the whole universe on screen.
   double get _universeFitZoom =>
@@ -828,10 +857,14 @@ class StardomainGame extends FlameGame {
 
     // â”€â”€â”€ Alliance awakening â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // A player or main-enemy attack on a dormant alliance star wakes the group.
+    // The "awakened" report (player-only) is queued AFTER the battle below so it
+    // reads: Star Captured â†’ Star Alliance Awakened.
+    StarAlliance? announceAwakening;
     if (dest.allianceId >= 0 && (owner == 'player' || _isEnemy(owner))) {
       final alliance = _allianceById(dest.allianceId);
       if (alliance != null && !alliance.isAwakened) {
         _awakenAlliance(alliance);
+        if (owner == 'player') announceAwakening = alliance;
       }
     }
 
@@ -839,15 +872,17 @@ class StardomainGame extends FlameGame {
     if (dest.specialType == SpecialStarType.ancientTrap) {
       dest.specialType = SpecialStarType.none; // trap sprung â€” gone forever
       final isPlayer = owner == 'player';
-      _eventQueue.add(GameEvent(
-        title: 'Ancient Trap!',
-        detail: isPlayer
-            ? 'Your fleet of $ships ships was obliterated\nby an ancient automated defence system!'
-            : 'An enemy fleet of $ships ships was destroyed\nby an ancient automated defence system!',
-        star: dest,
-        accentColor: const Color(0xFFFF6B6B),
-      ));
-      if (isPlayer) { battlesLost++; shipsLost += ships; }
+      if (isPlayer) {
+        _eventQueue.add(GameEvent(
+          title: 'Ancient Trap!',
+          detail: 'Your fleet of $ships ships was obliterated\n'
+              'by an ancient automated defence system!',
+          star: dest,
+          accentColor: const Color(0xFFFF6B6B),
+        ));
+        battlesLost++;
+        shipsLost += ships;
+      }
       onHudChanged?.call();
       return;
     }
@@ -1011,6 +1046,8 @@ class StardomainGame extends FlameGame {
             oppDestroyed: initialAttackers);
       }
     }
+    // Report the awakening after the battle: Star Captured â†’ Alliance Awakened.
+    if (announceAwakening != null) _queueAllianceAwakenedEvent(announceAwakening);
     onHudChanged?.call();
   }
 
@@ -1419,7 +1456,6 @@ class StardomainGame extends FlameGame {
 
   void _showMenu() {
     _state = GameState.menu;
-    _stopMusic();
     advanceEvent(); // unblock any in-flight event report
     _clearAll();
     _spawnMenuStarfield();
@@ -1430,6 +1466,7 @@ class StardomainGame extends FlameGame {
       ..remove(overlayMessage)
       ..remove(overlayStarInfo)
       ..remove(overlayAction)
+      ..remove(overlayReports)
       ..remove(overlayGameResult)
       ..add(overlayMenu);
     _playMusic('Title_Music.wav');
@@ -1466,7 +1503,6 @@ class StardomainGame extends FlameGame {
     _universeRngSeed = DateTime.now().millisecondsSinceEpoch;
     _buildUniverse(math.Random(_universeRngSeed));
     unawaited(StorageService.clearSave());
-    _stopMusic();
     _playMusic('level_music.wav');
     camera.viewfinder.position = Vector2(
       _playerHomePos.x - size.x / 2,
@@ -1495,7 +1531,6 @@ class StardomainGame extends FlameGame {
     _buildCosmetics(math.Random(save.seed));
     _buildStarsFromSave(save);
 
-    _stopMusic();
     _playMusic('level_music.wav');
 
     final home = _stars.firstWhere(
@@ -1620,8 +1655,11 @@ class StardomainGame extends FlameGame {
   }
 
   // Wakes a dormant alliance: all still-neutral members become a local enemy.
+  // Wake the alliance (claim still-neutral members) without reporting. The
+  // announcement is queued separately so it can be ordered after the battle.
   void _awakenAlliance(StarAlliance alliance) {
     alliance.isAwakened = true;
+    alliance.awakenedTurn = _currentTurn; // can't attack until a later turn
     for (final s in alliance.stars) {
       if (!s.isMounted) continue;
       if (s.owner == null) {
@@ -1629,6 +1667,9 @@ class StardomainGame extends FlameGame {
         _applyCaptureRing(s, alliance.owner);
       }
     }
+  }
+
+  void _queueAllianceAwakenedEvent(StarAlliance alliance) {
     final focus = alliance.stars.firstWhere(
       (s) => s.isMounted,
       orElse: () => alliance.stars.first,
@@ -1645,6 +1686,8 @@ class StardomainGame extends FlameGame {
   void _runAllianceAI(math.Random rand) {
     for (final alliance in _alliances) {
       if (!alliance.isAwakened) continue;
+      // Don't attack on the turn it awakened — only from the next turn on.
+      if (alliance.awakenedTurn >= _currentTurn) continue;
 
       final ownedStars = alliance.stars
           .where((s) => s.isMounted && s.owner == alliance.owner && s.ships > 3)
@@ -1810,11 +1853,13 @@ class StardomainGame extends FlameGame {
 
   // â”€â”€â”€ Audio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  void _playMusic(String f) {
-    _bgm.setReleaseMode(ReleaseMode.loop);
-    _bgm.play(AssetSource('sound/$f'), volume: 0.6);
+  Future<void> _playMusic(String f) async {
+    // Stop any current track first and await it, so a pending stop can't abort
+    // the track we're about to start (was killing the menu theme on launch).
+    await _bgm.stop();
+    await _bgm.setReleaseMode(ReleaseMode.loop);
+    await _bgm.play(AssetSource('sound/$f'), volume: 0.6);
   }
-  void _stopMusic() => _bgm.stop();
 
   // â”€â”€â”€ Cleanup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -1830,6 +1875,7 @@ class StardomainGame extends FlameGame {
     _alliances.clear();
     _wormholeRings.clear();
     _eventQueue.clear();
+    _reportHistory.clear();
     _currentEvent = null;
     _eventRingComponent = null;
     _playerTechs.clear();

@@ -33,76 +33,131 @@ class _ActionOverlayState extends State<ActionOverlay> {
 
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.black.withAlpha(210),
-          border: Border.all(color: Colors.green.shade400, width: 1.5),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Distance
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$turns',
-                  style: const TextStyle(color: Colors.white, fontSize: 22,
-                      fontWeight: FontWeight.bold, decoration: TextDecoration.none),
-                ),
-                Text('turns', style: TextStyle(color: Colors.green.shade200,
-                    fontSize: 11, decoration: TextDecoration.none)),
-              ],
-            ),
-            _divider(),
-            // Ship selector
-            GestureDetector(
-              onTap: game.decreaseShips,
-              child: _arrowBtn('<', ships <= 1),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Column(
+      // Absorb taps anywhere inside the menu so a click that misses a button
+      // doesn't fall through to the map and close the menu. Taps outside still
+      // reach the game (deselecting), and SEND/skip close it explicitly.
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {},
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withAlpha(210),
+            border: Border.all(color: Colors.green.shade400, width: 1.5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Distance
+              Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '$ships',
-                    style: const TextStyle(color: Colors.white, fontSize: 22,
-                        fontWeight: FontWeight.bold, decoration: TextDecoration.none),
+                    '$turns',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
-                  Text('ships', style: TextStyle(color: Colors.green.shade200,
-                      fontSize: 11, decoration: TextDecoration.none)),
+                  Text(
+                    'turns',
+                    style: TextStyle(
+                      color: Colors.green.shade200,
+                      fontSize: 11,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
                 ],
               ),
-            ),
-            GestureDetector(
-              onTap: game.increaseShips,
-              child: _arrowBtn('>', ships >= maxShips),
-            ),
-            _divider(),
-            // Send button
-            GestureDetector(
-              onTap: maxShips > 0 ? game.sendFleet : null,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: maxShips > 0 ? Colors.green.shade700 : Colors.grey.shade800,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: maxShips > 0 ? Colors.green.shade300 : Colors.grey.shade600,
-                  ),
-                ),
-                child: const Text(
-                  'SEND',
-                  style: TextStyle(color: Colors.white, fontSize: 14,
-                      fontWeight: FontWeight.bold, decoration: TextDecoration.none),
+              _divider(),
+              // Ship selector
+              GestureDetector(
+                onTap: game.decreaseShips,
+                child: _arrowBtn('<', ships <= 1),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$ships',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    Text(
+                      'ships',
+                      style: TextStyle(
+                        color: Colors.green.shade200,
+                        fontSize: 11,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              GestureDetector(
+                onTap: game.increaseShips,
+                child: _arrowBtn('>', ships >= maxShips),
+              ),
+              _divider(),
+              // Send button
+              GestureDetector(
+                onTap: maxShips > 0 ? game.sendFleet : null,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: maxShips > 0
+                        ? Colors.green.shade700
+                        : Colors.grey.shade800,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: maxShips > 0
+                          ? Colors.green.shade300
+                          : Colors.grey.shade600,
+                    ),
+                  ),
+                  child: const Text(
+                    'SEND',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
+              // Skip — only during auto-move: mark this star done, go to next.
+              if (game.isAutoMovePending) ...[
+                const SizedBox(width: 16),
+                GestureDetector(
+                  onTap: game.skipAutoMove,
+                  child: const Text(
+                    'skip',
+                    style: TextStyle(
+                      color: Color(0xFFFFB74D),
+                      fontSize: 14,
+                      fontStyle: FontStyle.italic,
+                      decoration: TextDecoration.underline,
+                      decorationColor: Color(0xFFFFB74D),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -110,7 +165,8 @@ class _ActionOverlayState extends State<ActionOverlay> {
 
   Widget _arrowBtn(String label, bool disabled) {
     return Container(
-      width: 32, height: 32,
+      width: 32,
+      height: 32,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: disabled ? Colors.grey.shade900 : Colors.white12,
@@ -129,7 +185,8 @@ class _ActionOverlayState extends State<ActionOverlay> {
   }
 
   Widget _divider() => Container(
-    width: 1, height: 36,
+    width: 1,
+    height: 36,
     color: Colors.green.shade800,
     margin: const EdgeInsets.symmetric(horizontal: 16),
   );

@@ -55,15 +55,20 @@ class _MenuOverlayState extends State<MenuOverlay> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Colors.white54)),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.white54),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Start New',
-                  style: TextStyle(
-                      color: Color(0xFFEF5350),
-                      fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Start New',
+                style: TextStyle(
+                  color: Color(0xFFEF5350),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ],
         ),
@@ -75,36 +80,46 @@ class _MenuOverlayState extends State<MenuOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black54,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset('assets/img/menu_title.png', width: 520),
-            const SizedBox(height: 12),
-            const Text(
-              'By NoTech Studios  Copyright 2026',
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 14,
-                decoration: TextDecoration.none,
+    // SizedBox.expand forces the menu to fill the screen (overlays get loose
+    // constraints, which would otherwise shrink it to the content and pin it
+    // top-left). Full height keeps the Spacers working.
+    return SizedBox.expand(
+      child: Container(
+        color: Colors.black54,
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Spacer(flex: 2),
+              Image.asset('assets/img/menu_title.png', width: 440),
+              const SizedBox(height: 22),
+              GestureDetector(
+                onTap: () => _onNewGame(context),
+                child: Image.asset('assets/img/newgame_button.png', width: 220),
               ),
-            ),
-            const SizedBox(height: 20),
-            GestureDetector(
-              onTap: () => _onNewGame(context),
-              child: Image.asset('assets/img/newgame_button.png', width: 240),
-            ),
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: _hasSave ? _onContinue : null,
-              child: Opacity(
-                opacity: _hasSave ? 1.0 : 0.35,
-                child: Image.asset('assets/img/continue_button.png', width: 240),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: _hasSave ? _onContinue : null,
+                child: Opacity(
+                  opacity: _hasSave ? 1.0 : 0.35,
+                  child: Image.asset(
+                    'assets/img/continue_button.png',
+                    width: 220,
+                  ),
+                ),
               ),
-            ),
-          ],
+              const Spacer(flex: 4),
+              // Studio credit at the bottom of the screen.
+              const Text(
+                'By NoTech Studios  Copyright 2026',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
         ),
       ),
     );

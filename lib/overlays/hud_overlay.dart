@@ -59,6 +59,27 @@ class _HudOverlayState extends State<HudOverlay> {
                   ),
                 ),
               ),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: game.showReports,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF455A64),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF90A4AE)),
+                  ),
+                  child: const Text(
+                    'REPORTS',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
           // Right: turn counter + end turn button
