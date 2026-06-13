@@ -1269,6 +1269,10 @@ class StardomainGame extends FlameGame {
       _defensiveTechs.where(hasTech).map((t) => t.displayName).toList();
 
   void _addBattleMarker(StarComponent star, {required bool won}) {
+    // The won/lost markers (circle / X) reveal the outcome on the map. When the
+    // animated battle scene is shown they'd spoil it, so only place them in the
+    // report-only mode (battles disabled).
+    if (!battlesDisabled) return;
     final r = math.max(20.0, star.radius);
     if (won) {
       final m = BattleWonMarker(starPosition: star.position.clone(), radius: r * 1.7);
