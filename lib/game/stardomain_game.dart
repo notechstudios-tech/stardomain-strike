@@ -574,6 +574,7 @@ class StardomainGame extends FlameGame {
 
   void setBattlesDisabled(bool value) {
     battlesDisabled = value;
+    unawaited(StorageService.saveBattlesDisabled(value));
   }
 
   // Abandon the current game and start a fresh universe.
@@ -1636,6 +1637,7 @@ class StardomainGame extends FlameGame {
   Future<void> onLoad() async {
     images.prefix = 'assets/';
     camera.viewfinder.anchor = Anchor.topLeft;
+    battlesDisabled = await StorageService.loadBattlesDisabled();
     await _loadSprites();
     await adsService.load();
     _showMenu();
