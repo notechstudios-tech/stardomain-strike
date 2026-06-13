@@ -80,9 +80,36 @@ class _HudOverlayState extends State<HudOverlay> {
                   ),
                 ),
               ),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: game.showTechMenu,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1565C0),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF64B5F6)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.science, color: Colors.white, size: 16),
+                      const SizedBox(width: 6),
+                      Text(
+                        'TECH  ${game.techPoints}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
-          // Right: turn counter + end turn button
+          // Right: turn counter + end turn button + settings gear
           Row(
             children: [
               _HudChip('Turn: ${game.currentTurn}'),
@@ -104,6 +131,25 @@ class _HudOverlayState extends State<HudOverlay> {
                       fontWeight: FontWeight.bold,
                       decoration: TextDecoration.none,
                     ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: game.showGameMenu,
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF37474F),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF90A4AE)),
+                  ),
+                  child: const Icon(
+                    Icons.settings,
+                    color: Colors.white,
+                    size: 22,
                   ),
                 ),
               ),

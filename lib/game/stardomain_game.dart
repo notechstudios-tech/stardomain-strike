@@ -11,6 +11,7 @@ import '../components/connection_line.dart';
 import '../components/event_ring.dart';
 import '../components/fleet_marker.dart';
 import '../components/star_component.dart';
+import '../models/battle_log.dart';
 import '../models/game_event.dart';
 import '../models/technology.dart';
 import '../models/fleet.dart';
@@ -41,6 +42,16 @@ class StardomainGame extends FlameGame {
   static const String overlayGameResult   = 'gameResult';
   static const String overlayEvent        = 'event';
   static const String overlayReports      = 'reports';
+  static const String overlayBattleScene  = 'battleScene';
+  static const String overlayGameMenu     = 'gameMenu';
+  static const String overlayTechMenu      = 'techMenu';
+
+  // Technology economy: each player star yields 1 tech/turn; players spend tech
+  // on per-star upgrades and one-off empire-wide abilities.
+  static const int techCostDefence    = 6;  // +1 star defence (max 3/star)
+  static const int techCostProduction = 8;  // +1 star production (max 3/star)
+  static const int techCostAbility    = 70; // buy-once empire ability
+  static const int techMaxPerStar     = 3;
 
   static const double universeWidth   = 3200;
   static const double universeHeight  = 1600;
@@ -57,6 +68,13 @@ class StardomainGame extends FlameGame {
   GameState _state          = GameState.menu;
   int       _currentTurn    = 1;
   int       _universeRngSeed = 0;
+
+  // Player setting: when true, skip the animated ship battles and show the
+  // plain per-star battle summary report instead (the original behaviour).
+  bool battlesDisabled = false;
+
+  // Unspent technology currency (player only).
+  int techPoints = 0;
 
   // Cumulative battle statistics
   int battlesWon  = 0;
@@ -120,13 +138,17 @@ class StardomainGame extends FlameGame {
 
   final Map<String, Sprite> _sprites = {};
   final AudioPlayer _bgm = AudioPlayer();
-  final AudioPlayer _sfx = AudioPlayer();
+  final AudioPlayer _sfx = AudioPlayer();   // UI + laser shots
+  final AudioPlayer _sfx2 = AudioPlayer();  // battle impacts (can overlap _sfx)
+  String? _currentTrack; // currently looping music asset
+  int _lastBattleSfxMs = 0; // throttle battle sound effects
 
   String messageText = '';
 
   void Function(String)? onMessageChanged;
   void Function()?       onHudChanged;
   void Function()?       onActionChanged;
+  void Function()?       onTechChanged; // Technology menu refresh
   void Function(StarComponent?)? onStarSelected;
 
   // â”€â”€â”€ Public accessors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -348,6 +370,8 @@ class StardomainGame extends FlameGame {
     for (final s in _stars.where((s) => s.owner == 'player' && s.isMounted)) {
       s.ships += s.resources + (hasTech(Technology.improvedProduction) ? 1 : 0);
     }
+    // Each player star also yields 1 unit of tech currency per turn.
+    techPoints += _stars.where((s) => s.owner == 'player' && s.isMounted).length;
     for (final s in _stars.where((s) => _isEnemy(s.owner) && s.isMounted)) {
       s.ships += s.resources;
     }
@@ -490,8 +514,15 @@ class StardomainGame extends FlameGame {
       _reportHistory.add((_currentTurn - 1, event));
       if (_reportHistory.length > 200) _reportHistory.removeAt(0);
 
-      // Move to the affected star: zoom in for the first one, then a quick
-      // continuous pan between subsequent stars (no full zoom-out).
+      // Battles are only animated when the player hasn't opted out; otherwise
+      // they fall back to the plain summary report card.
+      final isBattle = event.battle != null && !battlesDisabled;
+
+      // Music: ominous during battles, the normal score otherwise.
+      _playMusic(isBattle ? 'FullLowKeyMusic.wav' : 'level_music.wav');
+
+      // Move to the affected star first (ease into the first one, then a quick
+      // continuous pan between subsequent stars) — same for battles and reports.
       if (hasStar) {
         final double seconds;
         if (prevStarPos == null) {
@@ -510,18 +541,21 @@ class StardomainGame extends FlameGame {
         prevStarPos = star.position.clone();
       }
 
-      // Show the report and wait for the user to tap before moving on.
+      // Then show the battle scene / report card and wait for a tap.
       _currentEvent = event;
-      overlays.add(overlayEvent);
+      final overlay = isBattle ? overlayBattleScene : overlayEvent;
+      overlays.add(overlay);
       _eventAdvanceCompleter = Completer<void>();
       await _eventAdvanceCompleter!.future;
 
-      overlays.remove(overlayEvent);
+      overlays.remove(overlay);
       _currentEvent = null;
       _hideEventRing();
       if (_state == GameState.menu) break;
     }
     _eventQueue.clear();
+    // Restore the normal score after any battle music.
+    if (_state != GameState.menu) _playMusic('level_music.wav');
   }
 
   // Called from the event overlay when the user taps to advance.
@@ -534,6 +568,79 @@ class StardomainGame extends FlameGame {
 
   void showReports() => overlays.add(overlayReports);
   void hideReports() => overlays.remove(overlayReports);
+
+  void showGameMenu() => overlays.add(overlayGameMenu);
+  void hideGameMenu() => overlays.remove(overlayGameMenu);
+
+  void setBattlesDisabled(bool value) {
+    battlesDisabled = value;
+  }
+
+  // Abandon the current game and start a fresh universe.
+  void restartGame() {
+    overlays.remove(overlayGameMenu);
+    startGame();
+  }
+
+  // ─── Technology purchases ────────────────────────────────────────────────
+
+  void showTechMenu() => overlays.add(overlayTechMenu);
+  void hideTechMenu() => overlays.remove(overlayTechMenu);
+
+  // The star the Technology menu can upgrade (must be a player star).
+  StarComponent? get techUpgradeStar =>
+      (_selectedStar != null && _selectedStar!.owner == 'player')
+          ? _selectedStar
+          : null;
+
+  bool get canBuyStarDefence {
+    final s = techUpgradeStar;
+    return s != null &&
+        s.techDefence < techMaxPerStar &&
+        techPoints >= techCostDefence;
+  }
+
+  bool get canBuyStarProduction {
+    final s = techUpgradeStar;
+    return s != null &&
+        s.techProduction < techMaxPerStar &&
+        techPoints >= techCostProduction;
+  }
+
+  void buyStarDefence() {
+    if (!canBuyStarDefence) return;
+    final s = techUpgradeStar!;
+    techPoints -= techCostDefence;
+    s.defence += 1;
+    s.techDefence += 1;
+    _afterTechPurchase(s);
+  }
+
+  void buyStarProduction() {
+    if (!canBuyStarProduction) return;
+    final s = techUpgradeStar!;
+    techPoints -= techCostProduction;
+    s.resources += 1;
+    s.techProduction += 1;
+    _afterTechPurchase(s);
+  }
+
+  bool canBuyAbility(Technology t) =>
+      !_playerTechs.contains(t) && techPoints >= techCostAbility;
+
+  void buyAbility(Technology t) {
+    if (!canBuyAbility(t)) return;
+    techPoints -= techCostAbility;
+    _playerTechs.add(t);
+    _afterTechPurchase(null);
+  }
+
+  void _afterTechPurchase(StarComponent? star) {
+    onHudChanged?.call();
+    onTechChanged?.call();
+    if (star != null) onStarSelected?.call(star); // refresh star info card
+    unawaited(_saveGameState());
+  }
 
   // Most zoomed-out level that fits the whole universe on screen.
   double get _universeFitZoom =>
@@ -666,6 +773,8 @@ class StardomainGame extends FlameGame {
         wormholeDiscovered: star.wormholeDiscovered,
         allianceId: star.allianceId,
         active: star.active,
+        techDefence: star.techDefence,
+        techProduction: star.techProduction,
       ));
     }
 
@@ -695,6 +804,7 @@ class StardomainGame extends FlameGame {
         color: a.color.toARGB32(),
         isAwakened: a.isAwakened,
       )).toList(),
+      techPoints: techPoints,
     ));
   }
 
@@ -762,6 +872,8 @@ class StardomainGame extends FlameGame {
       };
       star.allianceId = ss.allianceId;
       star.active = ss.active;
+      star.techDefence = ss.techDefence;
+      star.techProduction = ss.techProduction;
 
       _stars.add(star);
       world.add(star);
@@ -927,24 +1039,41 @@ class StardomainGame extends FlameGame {
     final isPlayerAtk      = owner == 'player';
     final isPlayerDef      = prevOwner == 'player';
 
+    // Record a step-by-step log only for player-involved battles (for the
+    // animated battle scene). rec() is a no-op otherwise.
+    final record = isPlayerAtk || isPlayerDef;
+    final steps = <BattleStep>[];
+    void rec(BattleSide side, bool hit) {
+      if (record) steps.add(BattleStep(side, hit));
+    }
+
     // Alter Reality: 10% chance defenders switch sides before battle
     if (isPlayerAtk && hasTech(Technology.alterReality) && rand.nextDouble() < 0.1) {
+      for (var i = 0; i < defenders; i++) {
+        rec(BattleSide.attacker, true); // defenders wiped out
+      }
       attackers += defenders;
       defenders  = 0;
     }
 
     // Force Fields: auto-destroy first 2 attackers when player defends
     if (isPlayerDef && hasTech(Technology.forceFields)) {
-      attackers = math.max(0, attackers - 2);
+      final removed = math.min(2, attackers);
+      attackers -= removed;
+      for (var i = 0; i < removed; i++) {
+        rec(BattleSide.defender, true);
+      }
     }
 
     // Surprise Attack: player gets a free kill before battle
     if (isPlayerAtk && hasTech(Technology.surpriseAttack) && defenders > 0) {
       defenders--;
+      rec(BattleSide.attacker, true);
     }
     // Surprise Defence: player defending gets a free kill on attackers
     if (isPlayerDef && hasTech(Technology.surpriseDefence) && attackers > 0) {
       attackers--;
+      rec(BattleSide.defender, true);
     }
 
     // Helper: single attack roll respecting Improved Weapon Capacity
@@ -980,15 +1109,41 @@ class StardomainGame extends FlameGame {
 
       if (atkRoll >= atkThreshold) {
         defenders--;
-      } else if (isPlayerDef && hasTech(Technology.adaptiveShields)) {
-        adaptiveBonus++; // attacker missed â€” shields learn and adapt
+        rec(BattleSide.attacker, true);
+      } else {
+        if (isPlayerDef && hasTech(Technology.adaptiveShields)) {
+          adaptiveBonus++; // attacker missed â€” shields learn and adapt
+        }
+        rec(BattleSide.attacker, false);
       }
       if (defenders <= 0) break;
 
       // Defender roll â€” player attackers harder to kill with advancedShipDefence
       final defThreshold = isPlayerAtk && hasTech(Technology.advancedShipDefence) ? 7 : 6;
-      if (rand.nextInt(10) + 1 >= defThreshold) attackers--;
+      if (rand.nextInt(10) + 1 >= defThreshold) {
+        attackers--;
+        rec(BattleSide.defender, true);
+      } else {
+        rec(BattleSide.defender, false);
+      }
     }
+
+    // Assemble the battle log for the animated scene (player battles only).
+    final BattleLog? battleLog = record
+        ? BattleLog(
+            attackers: initialAttackers,
+            defenders: initialDefenders,
+            attackerColor: _battleColor(owner),
+            defenderColor: _battleColor(prevOwner),
+            steps: steps,
+            playerWon: isPlayerAtk ? attackers > 0 : attackers <= 0,
+            attackerPerks: isPlayerAtk ? _playerOffensivePerks() : const [],
+            defenderPerks: [
+              if (defence > 0) 'Defense +$defence',
+              if (isPlayerDef) ..._playerDefensivePerks(),
+            ],
+          )
+        : null;
 
     // Surviving ships stay at the star â€” not the starting count, the remainder
     if (attackers > 0) {
@@ -1014,7 +1169,8 @@ class StardomainGame extends FlameGame {
         _queueBattleEvent(dest, 'Star Captured!', won: true,
             shipsLeft: attackers,
             shipsLost: initialAttackers - attackers,
-            oppDestroyed: initialDefenders);
+            oppDestroyed: initialDefenders,
+            battle: battleLog);
       } else if (isPlayerDef) {
         battlesLost++;
         starsLost++;
@@ -1023,7 +1179,8 @@ class StardomainGame extends FlameGame {
         _queueBattleEvent(dest, 'Star Lost!', won: false,
             shipsLeft: attackers,
             shipsLost: initialDefenders,
-            oppDestroyed: initialAttackers - attackers);
+            oppDestroyed: initialAttackers - attackers,
+            battle: battleLog);
       }
     } else {
       dest.ships = defenders;
@@ -1036,14 +1193,16 @@ class StardomainGame extends FlameGame {
         _queueBattleEvent(dest, 'Attack Repelled', won: false,
             shipsLeft: defenders,
             shipsLost: initialAttackers,
-            oppDestroyed: initialDefenders - defenders);
+            oppDestroyed: initialDefenders - defenders,
+            battle: battleLog);
       } else if (isPlayerDef) {
         battlesWon++;
         _addBattleMarker(dest, won: true);
         _queueBattleEvent(dest, 'Star Defended!', won: true,
             shipsLeft: defenders,
             shipsLost: initialDefenders - defenders,
-            oppDestroyed: initialAttackers);
+            oppDestroyed: initialAttackers,
+            battle: battleLog);
       }
     }
     // Report the awakening after the battle: Star Captured â†’ Alliance Awakened.
@@ -1058,6 +1217,7 @@ class StardomainGame extends FlameGame {
     required int shipsLeft,
     required int shipsLost,
     required int oppDestroyed,
+    BattleLog? battle,
   }) {
     _eventQueue.add(GameEvent(
       title: title,
@@ -1066,8 +1226,46 @@ class StardomainGame extends FlameGame {
           'Opponent Ships Destroyed: $oppDestroyed',
       star: star,
       accentColor: won ? const Color(0xFF66BB6A) : const Color(0xFFEF5350),
+      battle: battle,
     ));
   }
+
+  // Battle-scene helpers ----------------------------------------------------
+
+  Color _battleColor(String? owner) {
+    if (owner == 'player') return const Color(0xFF42A5F5); // blue
+    if (_isEnemy(owner)) return const Color(0xFFEF5350); // red
+    if (owner != null && _isAlliance(owner)) {
+      final a = _allianceById(int.parse(owner.substring('alliance_'.length)));
+      if (a != null) return a.color;
+    }
+    return const Color(0xFF9E9E9E); // neutral grey
+  }
+
+  static const List<Technology> _offensiveTechs = [
+    Technology.advancedWeapons,
+    Technology.improvedWeaponStrength,
+    Technology.improvedWeaponCapacity,
+    Technology.ionCannon,
+    Technology.quantumAttack,
+    Technology.berserkerProtocol,
+    Technology.precisionTargeting,
+    Technology.surpriseAttack,
+    Technology.stellarRecycling,
+    Technology.alterReality,
+  ];
+  static const List<Technology> _defensiveTechs = [
+    Technology.advancedStarDefence,
+    Technology.advancedShipDefence,
+    Technology.forceFields,
+    Technology.surpriseDefence,
+    Technology.adaptiveShields,
+  ];
+
+  List<String> _playerOffensivePerks() =>
+      _offensiveTechs.where(hasTech).map((t) => t.displayName).toList();
+  List<String> _playerDefensivePerks() =>
+      _defensiveTechs.where(hasTech).map((t) => t.displayName).toList();
 
   void _addBattleMarker(StarComponent star, {required bool won}) {
     final r = math.max(20.0, star.radius);
@@ -1366,6 +1564,7 @@ class StardomainGame extends FlameGame {
     overlays.remove(overlayAction);
     overlays.add(overlayStarInfo);
     onStarSelected?.call(star);
+    onTechChanged?.call();
     onHudChanged?.call();
   }
 
@@ -1406,6 +1605,7 @@ class StardomainGame extends FlameGame {
     overlays.remove(overlayStarInfo);
     overlays.remove(overlayAction);
     onStarSelected?.call(null);
+    onTechChanged?.call();
     onActionChanged?.call();
   }
 
@@ -1467,6 +1667,9 @@ class StardomainGame extends FlameGame {
       ..remove(overlayStarInfo)
       ..remove(overlayAction)
       ..remove(overlayReports)
+      ..remove(overlayBattleScene)
+      ..remove(overlayGameMenu)
+      ..remove(overlayTechMenu)
       ..remove(overlayGameResult)
       ..add(overlayMenu);
     _playMusic('Title_Music.wav');
@@ -1525,6 +1728,7 @@ class StardomainGame extends FlameGame {
     _clearAll();
     _currentTurn = save.turn;
     _universeRngSeed = save.seed;
+    techPoints = save.techPoints;
     _state = GameState.transitioning;
     camera.viewfinder.zoom = 1.0;
 
@@ -1854,11 +2058,33 @@ class StardomainGame extends FlameGame {
   // â”€â”€â”€ Audio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _playMusic(String f) async {
-    // Stop any current track first and await it, so a pending stop can't abort
-    // the track we're about to start (was killing the menu theme on launch).
-    await _bgm.stop();
-    await _bgm.setReleaseMode(ReleaseMode.loop);
-    await _bgm.play(AssetSource('sound/$f'), volume: 0.6);
+    if (_currentTrack == f) return; // already looping this track
+    // Only stop if something has actually played — stopping a never-started
+    // player on cold launch can hang/throw and was killing the menu theme.
+    if (_currentTrack != null) {
+      try {
+        await _bgm.stop();
+      } catch (_) {}
+    }
+    try {
+      await _bgm.setReleaseMode(ReleaseMode.loop);
+      await _bgm.play(AssetSource('sound/$f'), volume: 0.6);
+      _currentTrack = f;
+    } catch (_) {}
+  }
+
+  // â”€â”€â”€ Battle sound effects (driven by the battle scene overlay) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Throttled so fast battles don't machine-gun the audio.
+  void playBattleSfx({required bool hit}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastBattleSfxMs < 70) return;
+    _lastBattleSfxMs = now;
+    _sfx.play(AssetSource('sound/hit_short.wav'), volume: 0.35); // laser shot
+    if (hit) {
+      _sfx2.play(AssetSource('sound/hit.wav'), volume: 0.5); // ship destroyed
+    } else {
+      _sfx2.play(AssetSource('sound/select.wav'), volume: 0.4); // shield absorb
+    }
   }
 
   // â”€â”€â”€ Cleanup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1879,6 +2105,7 @@ class StardomainGame extends FlameGame {
     _currentEvent = null;
     _eventRingComponent = null;
     _playerTechs.clear();
+    techPoints = 0;
     _peekedStar = null;
     _autoMovedStars.clear();
     _pendingAutoMoveStar = null;

@@ -11,6 +11,8 @@ class StarSave {
   final bool   wormholeDiscovered;
   final int    allianceId;            // -1 if not in an alliance
   final bool   active;                // true once attacked / engaged in combat
+  final int    techDefence;           // tech-bought defence bonus count (0..3)
+  final int    techProduction;        // tech-bought production bonus count (0..3)
 
   const StarSave({
     required this.x,
@@ -26,6 +28,8 @@ class StarSave {
     this.wormholeDiscovered = false,
     this.allianceId = -1,
     this.active = false,
+    this.techDefence = 0,
+    this.techProduction = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -36,6 +40,8 @@ class StarSave {
     'wormholeDiscovered': wormholeDiscovered,
     'allianceId': allianceId,
     'active': active,
+    'techDefence': techDefence,
+    'techProduction': techProduction,
   };
 
   factory StarSave.fromJson(Map<String, dynamic> j) => StarSave(
@@ -52,6 +58,8 @@ class StarSave {
     wormholeDiscovered: j['wormholeDiscovered'] as bool? ?? false,
     allianceId: j['allianceId'] as int? ?? -1,
     active: j['active'] as bool? ?? false,
+    techDefence: j['techDefence'] as int? ?? 0,
+    techProduction: j['techProduction'] as int? ?? 0,
   );
 }
 
@@ -117,6 +125,7 @@ class GameSave {
   final List<FleetSave> fleets;
   final List<String> technologies;
   final List<AllianceSave> alliances;
+  final int techPoints; // unspent tech currency
 
   const GameSave({
     required this.turn,
@@ -125,6 +134,7 @@ class GameSave {
     required this.fleets,
     this.technologies = const [],
     this.alliances = const [],
+    this.techPoints = 0,
   });
 
   String toJsonString() => jsonEncode({
@@ -134,6 +144,7 @@ class GameSave {
     'fleets': fleets.map((f) => f.toJson()).toList(),
     'technologies': technologies,
     'alliances': alliances.map((a) => a.toJson()).toList(),
+    'techPoints': techPoints,
   });
 
   factory GameSave.fromJsonString(String s) {
@@ -152,6 +163,7 @@ class GameSave {
               ?.map((e) => AllianceSave.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      techPoints: j['techPoints'] as int? ?? 0,
     );
   }
 }

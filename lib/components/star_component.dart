@@ -15,6 +15,12 @@ class StarComponent extends SpriteComponent {
   int             allianceId = -1; // -1 = not in an alliance
   bool            active = false;  // true once attacked / engaged in combat
 
+  // Tech upgrades bought for this star (each capped at 3). The bonus is folded
+  // directly into [defence] / [resources]; these counters enforce the cap and
+  // drive the "+n" display in the Technology menu.
+  int techDefence = 0;
+  int techProduction = 0;
+
   StarComponent({required this.config, required Sprite sprite})
       : owner = config.owner,
         ships = config.ships,

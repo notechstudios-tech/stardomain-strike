@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flame/game.dart';
 import 'game/stardomain_game.dart';
+import 'overlays/battle_scene_overlay.dart';
 import 'overlays/event_message_overlay.dart';
 import 'overlays/reports_overlay.dart';
 import 'overlays/game_result_overlay.dart';
 import 'overlays/menu_overlay.dart';
+import 'overlays/game_menu_overlay.dart';
+import 'overlays/tech_menu_overlay.dart';
 import 'overlays/hud_overlay.dart';
 import 'overlays/message_overlay.dart';
 import 'overlays/star_info_overlay.dart';
@@ -89,6 +92,9 @@ class _InputWrapperState extends State<_InputWrapper> {
           StardomainGame.overlayGameResult:   (_, g) => GameResultOverlay(game: g),
           StardomainGame.overlayEvent:        (_, g) => EventMessageOverlay(game: g),
           StardomainGame.overlayReports:      (_, g) => ReportsOverlay(game: g),
+          StardomainGame.overlayBattleScene:  (_, g) => BattleSceneOverlay(game: g),
+          StardomainGame.overlayGameMenu:     (_, g) => GameMenuOverlay(game: g),
+          StardomainGame.overlayTechMenu:     (_, g) => TechMenuOverlay(game: g),
         },
       ),
     );
